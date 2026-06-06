@@ -5,6 +5,48 @@ const CONFIG = {
     ALLOWED_COUNTS: [1, 2, 4, 6, 8],
 };
 
+const TimeUtils = {
+    timeZone: "Asia/Kolkata",
+
+    _getMs: (time) => {
+        // Lightweight Charts may pass a BusinessDay object for 1d+ timeframes or Unix timestamps (seconds)
+        if (typeof time === "object" && time.year) {
+            return Date.UTC(time.year, time.month - 1, time.day);
+        }
+        return time * 1000;
+    },
+
+    formatTooltip: (time) => {
+        const date = new Date(TimeUtils._getMs(time));
+        return date.toLocaleString("en-IN", {
+            timeZone: TimeUtils.timeZone,
+            year: "numeric",
+            month: "short",
+            day: "numeric",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+        }) + " (IST)";
+    },
+
+    formatAxis: (time, tickMarkType) => {
+        const date = new Date(TimeUtils._getMs(time));
+        // tickMarkType maps to zoom level: 0: Year, 1: Month, 2: DayOfMonth, 3: Time, 4: TimeWithSeconds
+        switch (tickMarkType) {
+            case 0: return date.toLocaleString("en-IN", { timeZone: TimeUtils.timeZone, year: "numeric" });
+            case 1: return date.toLocaleString("en-IN", { timeZone: TimeUtils.timeZone, month: "short", year: "numeric" });
+            case 2: return date.toLocaleString("en-IN", { timeZone: TimeUtils.timeZone, day: "numeric", month: "short" });
+            case 3:
+            case 4: return date.toLocaleString("en-IN", { timeZone: TimeUtils.timeZone, hour: "2-digit", minute: "2-digit", hour12: false });
+            default: return date.toLocaleString("en-IN", { timeZone: TimeUtils.timeZone, month: "short", day: "numeric" });
+        }
+    },
+
+    getCurrentTime: () => {
+        return new Date().toLocaleTimeString("en-IN", { timeZone: TimeUtils.timeZone, hour12: true }) + " (IST)";
+    }
+};
+
 const state = {
     chartCount: CONFIG.DEFAULT_CHART_COUNT,
     instruments: [],
@@ -44,9 +86,31 @@ async function loadInstruments() {
 }
 
 function sortDefaultInstruments() {
+    const order = [
+        "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT",
+        "MATIC", "TON", "SHIB", "LTC", "TRX", "NEAR", "APT", "ARB", "OP", "SUI",
+        "INJ", "TIA", "RNDR", "SEI", "DYDX", "FIL", "KAS", "STX", "LDO", "FET",
+        "RUNE", "WLD", "IMX", "HYPE", "PEPE", "WIF", "JUP", "PYTH", "BONK", "ORDI",
+        "BCH", "ETC", "XMR", "XLM", "HBAR", "VET", "ALGO", "GRT", "EGLD", "AAVE",
+        "SNX", "THETA", "EOS", "XTZ", "MANA", "SAND", "AXS", "GALA", "CRV", "MKR",
+        "STRK", "ENA", "W", "ZETA", "ONDO", "AERO", "JTO", "ETHFI", "BOME", "MEW",
+        "SLERF", "POPCAT", "PENGU", "OM", "TAO", "AR", "TRB", "SATS", "RATS", "ZIG",
+        "MYRO", "NFP", "ALT", "AI", "XAI", "MANTA", "MEME", "ACE", "NTRN", "BIGTIME",
+        "BLUR", "SUPER", "ILV", "BEAM", "MAGIC", "GMX", "COMP", "1INCH", "YFI", "SUSHI",
+        "UNI", "CAKE", "SSV", "EDU", "ID", "HOOK", "LQTY", "FXS", "GNS", "PENDLE",
+        "RDNT", "GTC", "BAND", "CYBER", "ARKM", "PORTAL", "PIXEL", "MAVIA", "GMT",
+        "LUNA", "DASH", "ZEC", "IOTA", "NEO", "CHZ", "BAT", "ENJ", "ZIL", "KAVA",
+        "RVN", "WAVES", "ONT", "ICX", "QTUM", "NANO", "OMG", "ZRX", "CELO", "BAL"
+    ];
+
     state.instruments.sort((left, right) => {
-        const order = ["BTC", "ETH", "SOL", "DOGE", "HYPE", "ARB", "BNB", "XRP", "AVAX", "LINK"];
-        return order.indexOf(left.symbol) - order.indexOf(right.symbol);
+        const indexLeft = order.indexOf(left.symbol);
+        const indexRight = order.indexOf(right.symbol);
+        
+        if (indexLeft !== -1 && indexRight !== -1) return indexLeft - indexRight;
+        if (indexLeft !== -1) return -1;
+        if (indexRight !== -1) return 1;
+        return left.symbol.localeCompare(right.symbol);
     });
 }
 
@@ -95,6 +159,7 @@ function renderGrid() {
             candleSeries: null,
             currentCandle: null,
             lastPrice: null,
+            referencePrice: null,
             liveSubscribed: false,
         };
 
@@ -118,7 +183,10 @@ function createChartPane(chartData, index) {
                 <span class="ticker-change">--</span>
             </div>
             <div class="pane-controls">
-                <select class="pane-select symbol-select" aria-label="Symbol"></select>
+                <div class="symbol-select-container">
+                    <input type="text" class="symbol-select-input" placeholder="Search..." aria-label="Symbol Search" autocomplete="off">
+                    <div class="custom-select-dropdown"></div>
+                </div>
                 <select class="pane-select interval-select" aria-label="Timeframe"></select>
             </div>
         </div>
@@ -131,30 +199,63 @@ function createChartPane(chartData, index) {
 
 function populatePaneControls(chartData) {
     const pane = document.getElementById(chartData.id);
-    const symbolSelect = pane.querySelector(".symbol-select");
+    const input = pane.querySelector(".symbol-select-input");
+    const dropdown = pane.querySelector(".custom-select-dropdown");
     const intervalSelect = pane.querySelector(".interval-select");
 
-    symbolSelect.innerHTML = state.instruments
-        .map(item => `<option value="${item.id}">${item.symbol} - Hyperliquid</option>`)
-        .join("");
-    symbolSelect.value = chartData.instrumentId;
+    input.value = chartData.symbol;
+
+    const renderOptions = (filter = "") => {
+        const lowerFilter = filter.toLowerCase();
+        const filtered = state.instruments.filter(item => 
+            item.symbol.toLowerCase().includes(lowerFilter)
+        );
+        dropdown.innerHTML = filtered.map(item => 
+            `<div class="custom-select-option" data-id="${item.id}">${item.symbol}</div>`
+        ).join("");
+    };
+
+    input.addEventListener("focus", () => {
+        input.value = "";
+        renderOptions();
+        dropdown.classList.add("show");
+    });
+
+    input.addEventListener("input", (e) => {
+        renderOptions(e.target.value);
+    });
+
+    input.addEventListener("blur", () => {
+        // Short delay allows the click event on the dropdown to fire before it disappears
+        setTimeout(() => {
+            dropdown.classList.remove("show");
+            input.value = chartData.symbol;
+        }, 150);
+    });
+
+    dropdown.addEventListener("click", (e) => {
+        if (e.target.classList.contains("custom-select-option")) {
+            const selectedId = e.target.getAttribute("data-id");
+            const instrument = state.instruments.find(item => item.id === selectedId);
+            
+            if (instrument && instrument.id !== chartData.instrumentId) {
+                unsubscribeChart(chartData);
+                chartData.instrumentId = instrument.id;
+                chartData.source = instrument.source;
+                chartData.symbol = instrument.symbol;
+                chartData.interval = instrument.timeframes.includes(chartData.interval)
+                    ? chartData.interval
+                    : instrument.timeframes[0];
+                updateIntervalOptions(chartData, intervalSelect);
+                resetChart(chartData);
+                loadChartData(chartData);
+            }
+            input.value = chartData.symbol;
+            dropdown.classList.remove("show");
+        }
+    });
 
     updateIntervalOptions(chartData, intervalSelect);
-
-    symbolSelect.addEventListener("change", () => {
-        const instrument = state.instruments.find(item => item.id === symbolSelect.value);
-        if (!instrument) return;
-        unsubscribeChart(chartData);
-        chartData.instrumentId = instrument.id;
-        chartData.source = instrument.source;
-        chartData.symbol = instrument.symbol;
-        chartData.interval = instrument.timeframes.includes(chartData.interval)
-            ? chartData.interval
-            : instrument.timeframes[0];
-        updateIntervalOptions(chartData, intervalSelect);
-        resetChart(chartData);
-        loadChartData(chartData);
-    });
 
     intervalSelect.addEventListener("change", () => {
         unsubscribeChart(chartData);
@@ -183,6 +284,9 @@ function initializeChart(chartData) {
             fontFamily: "Inter, system-ui, -apple-system, sans-serif",
             fontSize: 12,
         },
+        localization: {
+            timeFormatter: TimeUtils.formatTooltip,
+        },
         grid: {
             vertLines: { color: "#26313d" },
             horzLines: { color: "#26313d" },
@@ -191,9 +295,22 @@ function initializeChart(chartData) {
             timeVisible: true,
             secondsVisible: false,
             borderColor: "#394654",
+            tickMarkFormatter: TimeUtils.formatAxis,
         },
         rightPriceScale: {
             borderColor: "#394654",
+        },
+        crosshair: {
+            horzLine: {
+                color: "#8b9bb0",
+                style: 2, // LightweightCharts Dashed Style
+                labelBackgroundColor: "#151b23",
+            },
+            vertLine: {
+                color: "#8b9bb0",
+                style: 2, // LightweightCharts Dashed Style
+                labelBackgroundColor: "#151b23",
+            }
         },
     });
 
@@ -209,6 +326,7 @@ function initializeChart(chartData) {
 function resetChart(chartData) {
     chartData.currentCandle = null;
     chartData.lastPrice = null;
+    chartData.referencePrice = null;
     chartData.liveSubscribed = false;
     if (chartData.candleSeries) chartData.candleSeries.setData([]);
     setPaneMessage(chartData.id, "Loading");
@@ -227,7 +345,8 @@ async function loadChartData(chartData) {
         chartData.candleSeries.setData(candles);
         chartData.chart.timeScale().fitContent();
         chartData.currentCandle = candles[candles.length - 1];
-        updateTicker(chartData, chartData.currentCandle.close, chartData.currentCandle.open);
+        chartData.referencePrice = candles.length > 1 ? candles[candles.length - 2].close : chartData.currentCandle.open;
+        updateTicker(chartData, chartData.currentCandle.close, chartData.referencePrice);
         clearPaneMessage(chartData.id);
         subscribeChart(chartData);
         setDataStatus(`Loaded ${chartData.symbol} ${chartData.interval}`);
@@ -281,7 +400,7 @@ function applyPriceUpdate(chartData, tick) {
 
     const candle = buildRealtimeCandle(chartData, time, price);
     chartData.candleSeries.update(candle);
-    updateTicker(chartData, price, chartData.lastPrice);
+    updateTicker(chartData, price, chartData.referencePrice);
     flashTicker(chartData.id, chartData.lastPrice === null || price >= chartData.lastPrice ? "up" : "down");
     chartData.lastPrice = price;
 }
@@ -290,6 +409,9 @@ function buildRealtimeCandle(chartData, time, price) {
     const bucket = bucketTime(time, chartData.interval);
     const current = chartData.currentCandle;
     if (!current || current.time !== bucket) {
+        if (current) {
+            chartData.referencePrice = current.close;
+        }
         chartData.currentCandle = {
             time: bucket,
             open: price,
@@ -372,5 +494,5 @@ function setDataStatus(message) {
 }
 
 function updateTimestamp() {
-    document.getElementById("timestamp").textContent = new Date().toLocaleTimeString();
+    document.getElementById("timestamp").textContent = TimeUtils.getCurrentTime();
 }

@@ -152,21 +152,27 @@ def validate_timeframe(source: str, timeframe: str) -> bool:
     return timeframe in get_available_timeframes(source)
 
 
+_hyperliquid_symbols = [
+    "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT",
+    "MATIC", "TON", "SHIB", "LTC", "TRX", "NEAR", "APT", "ARB", "OP", "SUI",
+    "INJ", "TIA", "RNDR", "SEI", "DYDX", "FIL", "KAS", "STX", "LDO", "FET",
+    "RUNE", "WLD", "IMX", "HYPE", "PEPE", "WIF", "JUP", "PYTH", "BONK", "ORDI",
+    "BCH", "ETC", "XMR", "XLM", "HBAR", "VET", "ALGO", "GRT", "EGLD", "AAVE",
+    "SNX", "THETA", "EOS", "XTZ", "MANA", "SAND", "AXS", "GALA", "CRV", "MKR",
+    "STRK", "ENA", "W", "ZETA", "ONDO", "AERO", "JTO", "ETHFI", "BOME", "MEW",
+    "SLERF", "POPCAT", "PENGU", "OM", "TAO", "AR", "TRB", "SATS", "RATS", "ZIG",
+    "MYRO", "NFP", "ALT", "AI", "XAI", "MANTA", "MEME", "ACE", "NTRN", "BIGTIME",
+    "BLUR", "SUPER", "ILV", "BEAM", "MAGIC", "GMX", "COMP", "1INCH", "YFI", "SUSHI",
+    "UNI", "CAKE", "SSV", "EDU", "ID", "HOOK", "LQTY", "FXS", "GNS", "PENDLE",
+    "RDNT", "GTC", "BAND", "CYBER", "ARKM", "PORTAL", "PIXEL", "MAVIA", "GMT",
+    "LUNA", "DASH", "ZEC", "IOTA", "NEO", "CHZ", "BAT", "ENJ", "ZIL", "KAVA",
+    "RVN", "WAVES", "ONT", "ICX", "QTUM", "NANO", "OMG", "ZRX", "CELO", "BAL"
+]
+
 register_data_source(
     "hyperliquid",
     fetch_hyperliquid,
-    [
-        {"symbol": "BTC", "label": "Bitcoin Perp", "market": "Hyperliquid"},
-        {"symbol": "ETH", "label": "Ethereum Perp", "market": "Hyperliquid"},
-        {"symbol": "SOL", "label": "Solana Perp", "market": "Hyperliquid"},
-        {"symbol": "ARB", "label": "Arbitrum Perp", "market": "Hyperliquid"},
-        {"symbol": "DOGE", "label": "Dogecoin Perp", "market": "Hyperliquid"},
-        {"symbol": "HYPE", "label": "Hyperliquid Perp", "market": "Hyperliquid"},
-        {"symbol": "BNB", "label": "BNB Perp", "market": "Hyperliquid"},
-        {"symbol": "XRP", "label": "XRP Perp", "market": "Hyperliquid"},
-        {"symbol": "AVAX", "label": "Avalanche Perp", "market": "Hyperliquid"},
-        {"symbol": "LINK", "label": "Chainlink Perp", "market": "Hyperliquid"},
-    ],
+    [{"symbol": sym, "label": f"{sym} Perp", "market": "Hyperliquid"} for sym in _hyperliquid_symbols],
     ["1m", "5m", "15m", "1h", "4h", "1d"],
     "Crypto perpetuals via Hyperliquid",
 )

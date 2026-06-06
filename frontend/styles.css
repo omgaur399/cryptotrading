@@ -89,41 +89,47 @@ select {
 
 .dashboard-main {
     min-height: 0;
-    padding: 10px;
+    overflow-y: auto;
 }
 
 .charts-grid {
     display: grid;
     width: 100%;
-    height: 100%;
+    min-height: 100%;
     gap: 10px;
+    padding: 10px;
 }
 
 .layout-1 {
-    grid-template: 1fr / 1fr;
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(280px, 1fr);
 }
 
 .layout-2 {
-    grid-template: 1fr / repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: minmax(280px, 1fr);
 }
 
 .layout-4 {
-    grid-template: repeat(2, minmax(0, 1fr)) / repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(280px, 1fr));
 }
 
 .layout-6 {
-    grid-template: repeat(2, minmax(0, 1fr)) / repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(280px, 1fr));
 }
 
 .layout-8 {
-    grid-template: repeat(2, minmax(0, 1fr)) / repeat(4, minmax(0, 1fr));
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    grid-template-rows: repeat(2, minmax(280px, 1fr));
 }
 
 .chart-pane {
     min-width: 0;
     min-height: 0;
-    display: grid;
-    grid-template-rows: auto 1fr;
+    display: flex;
+    flex-direction: column;
     overflow: hidden;
     border: 1px solid var(--border);
     border-radius: 8px;
@@ -134,25 +140,27 @@ select {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 8px;
-    min-height: 46px;
-    padding: 7px 9px;
+    flex-wrap: wrap;
+    gap: 4px;
+    min-height: 26px;
+    padding: 2px 4px;
     background: var(--panel-2);
     border-bottom: 1px solid var(--border);
     transition: background-color 180ms ease;
+    flex-shrink: 0;
 }
 
 .pane-ticker,
 .pane-controls {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
     min-width: 0;
 }
 
 .ticker-symbol {
-    min-width: 88px;
-    font-size: 13px;
+    min-width: 45px;
+    font-size: 11px;
     font-weight: 700;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -160,14 +168,14 @@ select {
 }
 
 .ticker-price {
-    min-width: 74px;
-    font-size: 13px;
+    min-width: 50px;
+    font-size: 11px;
     text-align: right;
 }
 
 .ticker-change {
-    min-width: 62px;
-    font-size: 12px;
+    min-width: 40px;
+    font-size: 10px;
 }
 
 .up {
@@ -179,19 +187,91 @@ select {
 }
 
 .pane-select {
-    width: 118px;
+    width: 75px;
     min-width: 0;
-    height: 30px;
-    font-size: 12px;
+    height: 20px;
+    font-size: 10px;
+    padding: 0 2px;
+    margin: 0;
+}
+
+.symbol-select-container {
+    position: relative;
+    width: 75px;
+    min-width: 0;
+    height: 20px;
+}
+
+.symbol-select-input {
+    width: 100%;
+    height: 100%;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #10161f;
+    color: var(--text);
+    font-size: 10px;
+    padding: 0 4px;
+    margin: 0;
+    display: block;
+    box-sizing: border-box;
+}
+
+.symbol-select-input:focus {
+    outline: none;
+    border-color: var(--muted);
+}
+
+.custom-select-dropdown {
+    display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    max-height: 200px;
+    overflow-y: auto;
+    z-index: 100;
+    margin-top: 4px;
+    box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+}
+
+.custom-select-dropdown.show {
+    display: block;
+}
+
+.custom-select-option {
+    padding: 4px 6px;
+    cursor: pointer;
+    font-size: 10px;
+}
+
+.custom-select-option:hover {
+    background: var(--border);
 }
 
 .interval-select {
-    width: 70px;
+    width: 45px;
 }
 
 .chart-container {
     position: relative;
+    flex: 1;
     min-height: 0;
+    width: 100%;
+}
+
+/* Force charting elements to strictly respect container bounds to prevent stretching loops and bottom clipping */
+.chart-container > div:not(.chart-message),
+.chart-container > svg {
+    position: absolute !important;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100% !important;
+    height: 100% !important;
 }
 
 .chart-message {
@@ -240,24 +320,14 @@ select {
 }
 
 @media (max-width: 980px) {
-    .layout-6,
+    .layout-6 {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-rows: repeat(3, minmax(280px, 1fr));
+    }
+
     .layout-8 {
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        grid-template-rows: repeat(3, minmax(0, 1fr));
-    }
-
-    .pane-header {
-        align-items: stretch;
-        flex-direction: column;
-    }
-
-    .pane-controls {
-        width: 100%;
-    }
-
-    .pane-select {
-        flex: 1;
-        width: auto;
+        grid-template-rows: repeat(4, minmax(280px, 1fr));
     }
 }
 

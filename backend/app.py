@@ -119,6 +119,10 @@ def live_subscribe():
     return jsonify({"status": "subscribed", "source": source, "symbol": symbol})
 
 
+@app.route("/frontend/<path:filename>")
+def serve_frontend_assets(filename):
+    return send_from_directory(FRONTEND_DIR, filename)
+
 @app.route("/<path:filename>")
 def serve_static(filename):
     return send_from_directory(FRONTEND_DIR, filename)
@@ -138,7 +142,7 @@ def broadcast_live_tick(tick):
 
 if __name__ == "__main__":
     try:
-        logger.info("Starting trading dashboard on http://127.0.0.1:5000")
-        app.run(host="127.0.0.1", port=5000, debug=False, threaded=True, use_reloader=False)
+        logger.info("Starting trading dashboard on http://localhost:5000")
+        app.run(host="0.0.0.0", port=5000, debug=False, threaded=True, use_reloader=False)
     finally:
         stop_live_stream()

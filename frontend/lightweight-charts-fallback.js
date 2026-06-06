@@ -119,7 +119,7 @@ if (!window.LightweightCharts) {
                     left: 10,
                     right: 74,
                     top: 12,
-                    bottom: 20,
+                    bottom: 24,
                 };
                 const plotWidth = Math.max(this.chart.width - plot.left - plot.right, 120);
                 const plotHeight = Math.max(this.chart.height - plot.top - plot.bottom, 120);
@@ -166,6 +166,7 @@ if (!window.LightweightCharts) {
                 });
 
                 this._drawPriceAxis(plot, plotHeight, minPrice, maxPrice, scaleY);
+                this._drawTimeAxis(plot, plotWidth, visible, slot);
             }
 
             _drawPriceAxis(plot, plotHeight, minPrice, maxPrice, scaleY) {
@@ -179,6 +180,41 @@ if (!window.LightweightCharts) {
                     text.setAttribute("fill", "#8b9bb0");
                     text.setAttribute("font-size", "11");
                     text.textContent = formatAxisPrice(price);
+                    this.chart.axisGroup.appendChild(text);
+                }
+            }
+
+            _drawTimeAxis(plot, plotWidth, visible, slot) {
+                const axisY = this.chart.height - plot.bottom;
+                
+                // Thin dashed horizontal line above labels
+                const topBorder = line(plot.left, axisY, this.chart.width - plot.right, axisY, "#394654", 1);
+                topBorder.setAttribute("stroke-dasharray", "4,4");
+                this.chart.axisGroup.appendChild(topBorder);
+
+                if (!visible.length) return;
+
+                // Dynamically calculate evenly spaced tick marks
+                const tickSpacing = 80;
+                const tickCount = Math.max(2, Math.floor(plotWidth / tickSpacing));
+                const step = Math.max(1, Math.floor(visible.length / tickCount));
+
+                for (let i = 0; i < visible.length; i += step) {
+                    const candle = visible[i];
+                    const x = plot.left + slot * i + slot / 2;
+                    
+                    this.chart.axisGroup.appendChild(line(x, axisY, x, axisY + 4, "#394654", 1));
+
+                    const date = new Date(candle.time * 1000);
+                    const timeStr = date.toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false });
+                    
+                    const text = document.createElementNS(SVG_NS, "text");
+                    text.setAttribute("x", x);
+                    text.setAttribute("y", axisY + 16);
+                    text.setAttribute("fill", "#8b9bb0");
+                    text.setAttribute("font-size", "10");
+                    text.setAttribute("text-anchor", "middle");
+                    text.textContent = timeStr;
                     this.chart.axisGroup.appendChild(text);
                 }
             }
