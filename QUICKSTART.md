@@ -4,7 +4,7 @@
 
 ### Windows
 ```bash
-cd trading
+cd "c:\Users\Om Gaur\OneDrive\Documents\new  trading\Crypto-Trading-Charts"
 run.bat
 ```
 

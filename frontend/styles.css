@@ -263,7 +263,7 @@ select {
 }
 
 /* Force charting elements to strictly respect container bounds to prevent stretching loops and bottom clipping */
-.chart-container > div:not(.chart-message),
+.chart-container > div:not(.chart-message):not(.countdown-timer),
 .chart-container > svg {
     position: absolute !important;
     top: 0;
@@ -272,6 +272,41 @@ select {
     bottom: 0;
     width: 100% !important;
     height: 100% !important;
+}
+
+.countdown-timer {
+    position: absolute;
+    right: 0;
+    width: 48px; /* Slightly wider for the timer format */
+    height: 32px;
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    font-size: 11px;
+    font-weight: bold;
+    color: #ffffff;
+    pointer-events: none;
+    z-index: 10;
+    border-radius: 2px 0 0 2px;
+}
+
+.countdown-timer.up {
+    background-color: var(--green);
+}
+.countdown-timer.down {
+    background-color: var(--red);
+}
+
+.countdown-timer.show {
+    display: flex;
+}
+
+.countdown-timer .timer-val {
+    font-size: 9px;
+    font-weight: normal;
+    opacity: 0.85;
+    margin-top: 1px;
 }
 
 .chart-message {

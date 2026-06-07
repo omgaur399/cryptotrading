@@ -69,6 +69,7 @@ async function initializeApp() {
     sortDefaultInstruments();
     renderGrid();
     updateTimestamp();
+    setInterval(updateCountdowns, 1000);
     setInterval(updateTimestamp, 1000);
 }
 
@@ -148,19 +149,47 @@ function renderGrid() {
 
     for (let index = 1; index <= state.chartCount; index += 1) {
         const chartId = `chart-${index}`;
-        const defaultInstrument = state.instruments[(index - 1) % state.instruments.length];
+        
+        const defaultConfigs = [
+            { symbol: "BTC", interval: "1m" },
+            { symbol: "BTC", interval: "5m" },
+            { symbol: "BTC", interval: "15m" },
+            { symbol: "BTC", interval: "1h" },
+            { symbol: "BTC", interval: "4h" },
+            { symbol: "BTC", interval: "1d" },
+            { symbol: "none", interval: "1d" },
+            { symbol: "none", interval: "1d" }
+        ];
+        const config = defaultConfigs[(index - 1) % 8];
+        
+        let instrumentId = "none";
+        let source = "none";
+        let symbol = "No Chart";
+        let interval = "1d";
+        
+        if (config.symbol !== "none") {
+            const instrument = state.instruments.find(i => i.symbol === config.symbol) || state.instruments[0];
+            if (instrument) {
+                instrumentId = instrument.id;
+                source = instrument.source;
+                symbol = instrument.symbol;
+                interval = instrument.timeframes.includes(config.interval) ? config.interval : instrument.timeframes[0];
+            }
+        }
+
         const chartData = {
             id: chartId,
-            instrumentId: defaultInstrument.id,
-            source: defaultInstrument.source,
-            symbol: defaultInstrument.symbol,
-            interval: defaultInstrument.timeframes.includes("1m") ? "1m" : defaultInstrument.timeframes[0],
+            instrumentId: instrumentId,
+            source: source,
+            symbol: symbol,
+            interval: interval,
             chart: null,
             candleSeries: null,
             currentCandle: null,
             lastPrice: null,
             referencePrice: null,
             liveSubscribed: false,
+            lastDirection: 'up',
         };
 
         state.charts[chartId] = chartData;
@@ -192,6 +221,7 @@ function createChartPane(chartData, index) {
         </div>
         <div class="chart-container" id="${chartData.id}-container">
             <div class="chart-message">Loading</div>
+            <div class="countdown-timer" id="${chartData.id}-timer"></div>
         </div>
     `;
     return pane;
@@ -210,9 +240,14 @@ function populatePaneControls(chartData) {
         const filtered = state.instruments.filter(item => 
             item.symbol.toLowerCase().includes(lowerFilter)
         );
-        dropdown.innerHTML = filtered.map(item => 
+        let html = "";
+        if ("no chart".includes(lowerFilter) || "none".includes(lowerFilter)) {
+            html += `<div class="custom-select-option" data-id="none">No Chart</div>`;
+        }
+        html += filtered.map(item => 
             `<div class="custom-select-option" data-id="${item.id}">${item.symbol}</div>`
         ).join("");
+        dropdown.innerHTML = html;
     };
 
     input.addEventListener("focus", () => {
@@ -236,19 +271,30 @@ function populatePaneControls(chartData) {
     dropdown.addEventListener("click", (e) => {
         if (e.target.classList.contains("custom-select-option")) {
             const selectedId = e.target.getAttribute("data-id");
-            const instrument = state.instruments.find(item => item.id === selectedId);
             
-            if (instrument && instrument.id !== chartData.instrumentId) {
-                unsubscribeChart(chartData);
-                chartData.instrumentId = instrument.id;
-                chartData.source = instrument.source;
-                chartData.symbol = instrument.symbol;
-                chartData.interval = instrument.timeframes.includes(chartData.interval)
-                    ? chartData.interval
-                    : instrument.timeframes[0];
-                updateIntervalOptions(chartData, intervalSelect);
-                resetChart(chartData);
-                loadChartData(chartData);
+            if (selectedId === "none") {
+                if (chartData.instrumentId !== "none") {
+                    unsubscribeChart(chartData);
+                    chartData.instrumentId = "none";
+                    chartData.source = "none";
+                    chartData.symbol = "No Chart";
+                    resetChart(chartData);
+                }
+            } else {
+                const instrument = state.instruments.find(item => item.id === selectedId);
+                
+                if (instrument && instrument.id !== chartData.instrumentId) {
+                    unsubscribeChart(chartData);
+                    chartData.instrumentId = instrument.id;
+                    chartData.source = instrument.source;
+                    chartData.symbol = instrument.symbol;
+                    chartData.interval = instrument.timeframes.includes(chartData.interval)
+                        ? chartData.interval
+                        : instrument.timeframes[0];
+                    updateIntervalOptions(chartData, intervalSelect);
+                    resetChart(chartData);
+                    loadChartData(chartData);
+                }
             }
             input.value = chartData.symbol;
             dropdown.classList.remove("show");
@@ -274,7 +320,6 @@ function updateIntervalOptions(chartData, intervalSelect) {
 
 function initializeChart(chartData) {
     const container = document.getElementById(`${chartData.id}-container`);
-    container.innerHTML = "";
 
     chartData.chart = LightweightCharts.createChart(container, {
         autoSize: true,
@@ -282,7 +327,7 @@ function initializeChart(chartData) {
             background: { color: "#11161d" },
             textColor: "#d8dee8",
             fontFamily: "Inter, system-ui, -apple-system, sans-serif",
-            fontSize: 12,
+            fontSize: 10,
         },
         localization: {
             timeFormatter: TimeUtils.formatTooltip,
@@ -296,9 +341,14 @@ function initializeChart(chartData) {
             secondsVisible: false,
             borderColor: "#394654",
             tickMarkFormatter: TimeUtils.formatAxis,
+            rightOffset: 25,
+            barSpacing: 8,
+            shiftVisibleRangeOnNewBar: true,
         },
         rightPriceScale: {
             borderColor: "#394654",
+            ticksVisible: false,
+            entireTextOnly: false,
         },
         crosshair: {
             horzLine: {
@@ -320,6 +370,11 @@ function initializeChart(chartData) {
         wickUpColor: "#16a34a",
         wickDownColor: "#dc2626",
         borderVisible: false,
+        priceLineVisible: true,
+        priceLineColor: "#16a34a", 
+        priceLineWidth: 1,
+        priceLineStyle: 1, // 1 = Dotted Line
+        lastValueVisible: false, // Disable default label; we'll draw our own.
     });
 }
 
@@ -329,10 +384,15 @@ function resetChart(chartData) {
     chartData.referencePrice = null;
     chartData.liveSubscribed = false;
     if (chartData.candleSeries) chartData.candleSeries.setData([]);
-    setPaneMessage(chartData.id, "Loading");
+    setPaneMessage(chartData.id, chartData.instrumentId === "none" ? "No Chart Selected" : "Loading");
+    updateTicker(chartData, null, null);
 }
 
 async function loadChartData(chartData) {
+    if (chartData.instrumentId === "none") {
+        setPaneMessage(chartData.id, "No Chart Selected");
+        return;
+    }
     try {
         setDataStatus(`Loading ${chartData.symbol} ${chartData.interval}`);
         const response = await fetch(`${CONFIG.API_BASE}/data/${chartData.source}/${chartData.symbol}/${chartData.interval}`);
@@ -343,13 +403,29 @@ async function loadChartData(chartData) {
 
         const candles = payload.candles.map(normalizeCandle).filter(Boolean);
         chartData.candleSeries.setData(candles);
-        chartData.chart.timeScale().fitContent();
+
+        // Forcefully re-apply the right gap because setData() overwrites it by default
+        chartData.chart.timeScale().applyOptions({
+            rightOffset: 25,
+            barSpacing: 8,
+        });
+        chartData.chart.timeScale().scrollToRealTime();
+
         chartData.currentCandle = candles[candles.length - 1];
         chartData.referencePrice = candles.length > 1 ? candles[candles.length - 2].close : chartData.currentCandle.open;
+        
+        // Set initial dynamic price line color
+        const isUp = chartData.currentCandle.close >= chartData.currentCandle.open;
+        chartData.lastDirection = isUp ? 'up' : 'down';
+        chartData.candleSeries.applyOptions({
+            priceLineColor: isUp ? "#16a34a" : "#dc2626"
+        });
+
         updateTicker(chartData, chartData.currentCandle.close, chartData.referencePrice);
         clearPaneMessage(chartData.id);
         subscribeChart(chartData);
         setDataStatus(`Loaded ${chartData.symbol} ${chartData.interval}`);
+        updateCountdowns(); // Show timer instantly after load
     } catch (error) {
         setPaneMessage(chartData.id, error.message);
         setDataStatus(error.message);
@@ -400,9 +476,18 @@ function applyPriceUpdate(chartData, tick) {
 
     const candle = buildRealtimeCandle(chartData, time, price);
     chartData.candleSeries.update(candle);
+
+    // Dynamically update the dotted line and box color based on tick direction
+    const isUp = candle.close >= candle.open;
+    chartData.lastDirection = isUp ? 'up' : 'down';
+    chartData.candleSeries.applyOptions({
+        priceLineColor: isUp ? "#16a34a" : "#dc2626"
+    });
+
     updateTicker(chartData, price, chartData.referencePrice);
     flashTicker(chartData.id, chartData.lastPrice === null || price >= chartData.lastPrice ? "up" : "down");
     chartData.lastPrice = price;
+    updateCountdowns(); // Show timer instantly after tick
 }
 
 function buildRealtimeCandle(chartData, time, price) {
@@ -442,6 +527,16 @@ function bucketTime(time, interval) {
 
 function updateTicker(chartData, price, reference) {
     const pane = document.getElementById(chartData.id);
+    
+    if (price === null) {
+        pane.querySelector(".ticker-symbol").textContent = chartData.symbol === "No Chart" ? "No Chart" : `${chartData.symbol} ${chartData.interval}`;
+        pane.querySelector(".ticker-price").textContent = "--";
+        pane.querySelector(".ticker-price").className = "ticker-price";
+        pane.querySelector(".ticker-change").textContent = "--";
+        pane.querySelector(".ticker-change").className = "ticker-change";
+        return;
+    }
+
     const direction = reference === null || price >= reference ? "up" : "down";
     const change = reference ? ((price - reference) / reference) * 100 : 0;
 
@@ -479,6 +574,73 @@ function setPaneMessage(chartId, message) {
 function clearPaneMessage(chartId) {
     const messageEl = document.querySelector(`#${chartId}-container .chart-message`);
     if (messageEl) messageEl.remove();
+}
+
+function updateCountdowns() {
+    const now = Date.now();
+    Object.values(state.charts).forEach(chartData => {
+        let timerEl = document.getElementById(`${chartData.id}-timer`);
+        
+        // Recreate the timer dynamically if the charting engine wiped the container HTML
+        if (!timerEl) {
+            const container = document.getElementById(`${chartData.id}-container`);
+            if (!container) return;
+            timerEl = document.createElement("div");
+            timerEl.id = `${chartData.id}-timer`;
+            timerEl.className = "countdown-timer";
+            container.appendChild(timerEl);
+        }
+
+        if (!chartData.candleSeries || chartData.lastPrice === null) {
+            timerEl.classList.remove("show");
+            return;
+        }
+
+        const remaining = getCountdownMs(chartData.interval, now);
+        if (remaining === null) {
+            timerEl.classList.remove("show");
+            return;
+        }
+
+        // Get the exact Y coordinate of the live price on the canvas
+        const y = chartData.candleSeries.priceToCoordinate(chartData.lastPrice);
+        if (y === null || y < 0) {
+            timerEl.classList.remove("show");
+            return;
+        }
+
+        const timerHeight = 32; // Double height for price and timer
+        timerEl.style.top = `${y - (timerHeight / 2)}px`;
+        
+        const priceStr = formatPrice(chartData.lastPrice);
+        const timerStr = formatCountdown(remaining);
+        
+        timerEl.innerHTML = `<span>${priceStr}</span><span class="timer-val">${timerStr}</span>`;
+
+        timerEl.classList.remove('up', 'down');
+        timerEl.classList.add(chartData.lastDirection);
+        timerEl.classList.add("show");
+    });
+}
+
+function getCountdownMs(interval, now) {
+    const secondsMap = { "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400 };
+    const seconds = secondsMap[interval];
+    if (!seconds) return null; // Skip complex intervals like 1wk, 1mo
+
+    const ms = seconds * 1000;
+    const next = Math.ceil(now / ms) * ms;
+    return next === now ? ms : next - now;
+}
+
+function formatCountdown(ms) {
+    const totalSeconds = Math.floor(ms / 1000);
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    
+    const minSec = `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+    return h > 0 ? `${h.toString().padStart(2, "0")}:${minSec}` : minSec;
 }
 
 function updateConnectionStatus(isConnected) {

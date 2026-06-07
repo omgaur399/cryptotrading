@@ -12,7 +12,7 @@ Your trading dashboard is fully set up and ready to go! Here's how to start:
 Open a PowerShell/Command Prompt and run:
 
 ```bash
-cd "c:\Users\Om Gaur\OneDrive\Documents\trading"
+cd "c:\Users\Om Gaur\OneDrive\Documents\new  trading\Crypto-Trading-Charts"
 python backend/app.py
 ```
 

@@ -67,11 +67,11 @@ if (!window.LightweightCharts) {
             }
 
             timeScale() {
-                return { fitContent: () => {} };
-            }
-
-            applyOptions(options) {
-                Object.assign(this.options, options);
+                return { 
+                    fitContent: () => {},
+                    scrollToRealTime: () => {},
+                    applyOptions: () => {},
+                };
             }
 
             _redraw() {
@@ -93,6 +93,14 @@ if (!window.LightweightCharts) {
                 this.candles = [];
                 this.group = document.createElementNS(SVG_NS, "g");
                 this.chart.plotGroup.appendChild(this.group);
+            }
+
+            applyOptions(options) {
+                Object.assign(this.options, options);
+            }
+
+            priceToCoordinate(price) {
+                return this.scaleY ? this.scaleY(price) : null;
             }
 
             setData(data) {
@@ -117,7 +125,7 @@ if (!window.LightweightCharts) {
 
                 const plot = {
                     left: 10,
-                    right: 74,
+                    right: 48,
                     top: 12,
                     bottom: 24,
                 };
@@ -139,6 +147,7 @@ if (!window.LightweightCharts) {
                 maxPrice += range * 0.08;
 
                 const scaleY = price => plot.top + ((maxPrice - price) / (maxPrice - minPrice)) * plotHeight;
+                this.scaleY = scaleY; // Store for priceToCoordinate calculations
                 const slot = plotWidth / visible.length;
                 const bodyWidth = Math.max(2, Math.min(9, slot * 0.64));
 
@@ -167,6 +176,18 @@ if (!window.LightweightCharts) {
 
                 this._drawPriceAxis(plot, plotHeight, minPrice, maxPrice, scaleY);
                 this._drawTimeAxis(plot, plotWidth, visible, slot);
+
+                // Draw live price marker, dotted line, and box overlay
+                const lastCandle = visible[visible.length - 1];
+                if (lastCandle) {
+                    const currentPrice = lastCandle.close;
+                    const currentY = scaleY(currentPrice);
+                    const color = this.options.priceLineColor || (currentPrice >= lastCandle.open ? "#16a34a" : "#dc2626");
+
+                    const priceLine = line(plot.left, currentY, this.chart.width - plot.right, currentY, color, 1);
+                    priceLine.setAttribute("stroke-dasharray", "2,2");
+                    this.chart.axisGroup.appendChild(priceLine);
+                }
             }
 
             _drawPriceAxis(plot, plotHeight, minPrice, maxPrice, scaleY) {
@@ -175,10 +196,11 @@ if (!window.LightweightCharts) {
                     const price = minPrice + ((maxPrice - minPrice) / ticks) * i;
                     const y = scaleY(price);
                     const text = document.createElementNS(SVG_NS, "text");
-                    text.setAttribute("x", this.chart.width - 66);
+                    text.setAttribute("x", this.chart.width - 6);
                     text.setAttribute("y", y + 4);
                     text.setAttribute("fill", "#8b9bb0");
                     text.setAttribute("font-size", "11");
+                    text.setAttribute("text-anchor", "end");
                     text.textContent = formatAxisPrice(price);
                     this.chart.axisGroup.appendChild(text);
                 }
