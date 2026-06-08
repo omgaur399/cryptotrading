@@ -61,6 +61,12 @@ const state = {
 document.addEventListener("DOMContentLoaded", initializeApp);
 
 async function initializeApp() {
+    // Inject a blank favicon to prevent 404 errors
+    const favicon = document.createElement('link');
+    favicon.rel = 'icon';
+    favicon.href = 'data:,';
+    document.head.appendChild(favicon);
+
     state.theme = localStorage.getItem(CONFIG.THEME_STORAGE_KEY) || "dark";
     if (state.theme === "light") document.body.classList.add("light-theme");
     injectThemeStyles();
@@ -84,7 +90,6 @@ async function initializeApp() {
 
     connectLiveStream();
     await loadInstruments();
-    sortDefaultInstruments();
     renderGrid();
     updateTimestamp();
     setInterval(updateCountdowns, 1000);
@@ -129,40 +134,44 @@ function saveLayoutState() {
 }
 
 async function loadInstruments() {
-    const response = await fetch(`${CONFIG.API_BASE}/instruments`);
-    if (!response.ok) throw new Error("Unable to load instruments");
-    const instruments = await response.json();
-    state.instruments = instruments.filter(item => item.source === "hyperliquid");
-    if (!state.instruments.length) throw new Error("No Hyperliquid instruments available");
-}
+    let hyperliquidPairs = [];
+    
+    try {
+        // Try to fetch the live active coin universe directly from the exchange
+        const res = await fetch("https://api.hyperliquid.xyz/info", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "meta" })
+        });
+        const data = await res.json();
+        hyperliquidPairs = data.universe.map(coin => coin.name);
+    } catch (error) {
+        console.warn("Could not fetch live coin universe, using 130+ fallback list.", error);
+        // Fallback master list just in case of an ad-blocker or network hiccup
+        hyperliquidPairs = [
+            "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT",
+            "MATIC", "TON", "SHIB", "LTC", "TRX", "NEAR", "APT", "ARB", "OP", "SUI",
+            "INJ", "TIA", "RNDR", "SEI", "DYDX", "FIL", "KAS", "STX", "LDO", "FET",
+            "RUNE", "WLD", "IMX", "HYPE", "PEPE", "WIF", "JUP", "PYTH", "BONK", "ORDI",
+            "BCH", "ETC", "XMR", "XLM", "HBAR", "VET", "ALGO", "GRT", "EGLD", "AAVE",
+            "SNX", "THETA", "EOS", "XTZ", "MANA", "SAND", "AXS", "GALA", "CRV", "MKR",
+            "STRK", "ENA", "W", "ZETA", "ONDO", "AERO", "JTO", "ETHFI", "BOME", "MEW",
+            "SLERF", "POPCAT", "PENGU", "OM", "TAO", "AR", "TRB", "SATS", "RATS", "ZIG",
+            "MYRO", "NFP", "ALT", "AI", "XAI", "MANTA", "MEME", "ACE", "NTRN", "BIGTIME",
+            "BLUR", "SUPER", "ILV", "BEAM", "MAGIC", "GMX", "COMP", "1INCH", "YFI", "SUSHI",
+            "UNI", "CAKE", "SSV", "EDU", "ID", "HOOK", "LQTY", "FXS", "GNS", "PENDLE",
+            "RDNT", "GTC", "BAND", "CYBER", "ARKM", "PORTAL", "PIXEL", "MAVIA", "GMT",
+            "LUNA", "DASH", "ZEC", "IOTA", "NEO", "CHZ", "BAT", "ENJ", "ZIL", "KAVA",
+            "RVN", "WAVES", "ONT", "ICX", "QTUM", "NANO", "OMG", "ZRX", "CELO", "BAL"
+        ];
+    }
 
-function sortDefaultInstruments() {
-    const order = [
-        "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT",
-        "MATIC", "TON", "SHIB", "LTC", "TRX", "NEAR", "APT", "ARB", "OP", "SUI",
-        "INJ", "TIA", "RNDR", "SEI", "DYDX", "FIL", "KAS", "STX", "LDO", "FET",
-        "RUNE", "WLD", "IMX", "HYPE", "PEPE", "WIF", "JUP", "PYTH", "BONK", "ORDI",
-        "BCH", "ETC", "XMR", "XLM", "HBAR", "VET", "ALGO", "GRT", "EGLD", "AAVE",
-        "SNX", "THETA", "EOS", "XTZ", "MANA", "SAND", "AXS", "GALA", "CRV", "MKR",
-        "STRK", "ENA", "W", "ZETA", "ONDO", "AERO", "JTO", "ETHFI", "BOME", "MEW",
-        "SLERF", "POPCAT", "PENGU", "OM", "TAO", "AR", "TRB", "SATS", "RATS", "ZIG",
-        "MYRO", "NFP", "ALT", "AI", "XAI", "MANTA", "MEME", "ACE", "NTRN", "BIGTIME",
-        "BLUR", "SUPER", "ILV", "BEAM", "MAGIC", "GMX", "COMP", "1INCH", "YFI", "SUSHI",
-        "UNI", "CAKE", "SSV", "EDU", "ID", "HOOK", "LQTY", "FXS", "GNS", "PENDLE",
-        "RDNT", "GTC", "BAND", "CYBER", "ARKM", "PORTAL", "PIXEL", "MAVIA", "GMT",
-        "LUNA", "DASH", "ZEC", "IOTA", "NEO", "CHZ", "BAT", "ENJ", "ZIL", "KAVA",
-        "RVN", "WAVES", "ONT", "ICX", "QTUM", "NANO", "OMG", "ZRX", "CELO", "BAL"
-    ];
-
-    state.instruments.sort((left, right) => {
-        const indexLeft = order.indexOf(left.symbol);
-        const indexRight = order.indexOf(right.symbol);
-        
-        if (indexLeft !== -1 && indexRight !== -1) return indexLeft - indexRight;
-        if (indexLeft !== -1) return -1;
-        if (indexRight !== -1) return 1;
-        return left.symbol.localeCompare(right.symbol);
-    });
+    state.instruments = hyperliquidPairs.map(sym => ({
+        id: sym,
+        source: "hyperliquid",
+        symbol: sym,
+        timeframes: ["1m", "5m", "15m", "1h", "4h", "1d"]
+    }));
 }
 
 function connectLiveStream() {
@@ -224,6 +233,19 @@ function renderGrid() {
         let targetIndicators = savedConfig.indicators || {
             volume: true, sma: false, ema: false, smaPeriod: 20, emaPeriod: 20
         };
+        targetIndicators.smaColor = targetIndicators.smaColor || '#f59e0b';
+        targetIndicators.emaColor = targetIndicators.emaColor || '#3b82f6';
+        targetIndicators.smaLineWidth = targetIndicators.smaLineWidth || 1;
+        targetIndicators.emaLineWidth = targetIndicators.emaLineWidth || 1;
+        targetIndicators.bb = targetIndicators.bb || false;
+        targetIndicators.bbPeriod = targetIndicators.bbPeriod || 20;
+        targetIndicators.bbStdDev = targetIndicators.bbStdDev || 2;
+        targetIndicators.bbColor = targetIndicators.bbColor || '#ec4899';
+        targetIndicators.bbLineWidth = targetIndicators.bbLineWidth || 1;
+        targetIndicators.rsi = targetIndicators.rsi || false;
+        targetIndicators.rsiPeriod = targetIndicators.rsiPeriod || 14;
+        targetIndicators.rsiColor = targetIndicators.rsiColor || '#8b5cf6';
+        targetIndicators.rsiLineWidth = targetIndicators.rsiLineWidth || 2;
         
         if (targetSymbol !== "none" && targetSymbol !== "No Chart") {
             const instrument = state.instruments.find(i => i.symbol === targetSymbol) || state.instruments.find(i => i.symbol === defaultConfig.symbol) || state.instruments[0];
@@ -246,6 +268,10 @@ function renderGrid() {
             volumeSeries: null,
             smaSeries: null,
             emaSeries: null,
+            bbUpperSeries: null,
+            bbMiddleSeries: null,
+            bbLowerSeries: null,
+            rsiSeries: null,
             cachedData: [],
             currentCandle: null,
             lastPrice: null,
@@ -253,6 +279,9 @@ function renderGrid() {
             liveSubscribed: false,
             lastDirection: 'up',
             indicators: targetIndicators,
+            pendingUpdate: false,
+            flashDirection: 'up',
+            lastUIUpdate: 0,
         };
 
         state.charts[chartId] = chartData;
@@ -271,6 +300,8 @@ function createChartPane(chartData, index) {
     const volText = chartData.indicators.volume ? "On" : "Off";
     const smaText = chartData.indicators.sma ? "On" : "Off";
     const emaText = chartData.indicators.ema ? "On" : "Off";
+    const bbText = chartData.indicators.bb ? "On" : "Off";
+    const rsiText = chartData.indicators.rsi ? "On" : "Off";
 
     pane.innerHTML = `
         <div class="pane-header" id="${chartData.id}-ticker">
@@ -290,7 +321,10 @@ function createChartPane(chartData, index) {
                     <option value="volume">Volume (${volText})</option>
                     <option value="sma">SMA ${chartData.indicators.smaPeriod} (${smaText})</option>
                     <option value="ema">EMA ${chartData.indicators.emaPeriod} (${emaText})</option>
+                    <option value="bb">BB ${chartData.indicators.bbPeriod} (${bbText})</option>
+                    <option value="rsi">RSI ${chartData.indicators.rsiPeriod} (${rsiText})</option>
                 </select>
+                <button class="settings-btn" id="${chartData.id}-settings" title="Chart Settings">⚙️</button>
             </div>
         </div>
         <div class="chart-container" id="${chartData.id}-container">
@@ -307,6 +341,7 @@ function populatePaneControls(chartData) {
     const dropdown = pane.querySelector(".custom-select-dropdown");
     const intervalSelect = pane.querySelector(".interval-select");
     const indicatorSelect = pane.querySelector(".indicator-select");
+    const settingsBtn = pane.querySelector(`#${chartData.id}-settings`);
 
     input.value = chartData.symbol;
 
@@ -330,6 +365,8 @@ function populatePaneControls(chartData) {
         renderOptions();
         dropdown.classList.add("show");
     });
+
+    settingsBtn.addEventListener("click", () => openSettingsModal(chartData));
 
     input.addEventListener("input", (e) => {
         renderOptions(e.target.value);
@@ -397,43 +434,49 @@ function populatePaneControls(chartData) {
             }
             e.target.options[1].text = `Volume (${chartData.indicators.volume ? 'On' : 'Off'})`;
         } else if (indicator === "sma") {
-            if (!chartData.indicators.sma) {
-                const input = prompt("Enter period for SMA:", chartData.indicators.smaPeriod);
-                const period = parseInt(input, 10);
-                if (input !== null && !isNaN(period) && period > 0) {
-                    chartData.indicators.smaPeriod = period;
-                    chartData.indicators.sma = true;
-                    if (chartData.smaSeries) {
-                        chartData.smaSeries.setData(calculateSMA(chartData.cachedData, period));
-                        chartData.smaSeries.applyOptions({ visible: true });
-                    }
+            chartData.indicators.sma = !chartData.indicators.sma;
+            if (chartData.smaSeries) {
+                if (chartData.indicators.sma) {
+                    chartData.smaSeries.setData(calculateSMA(chartData.cachedData, chartData.indicators.smaPeriod));
                 }
-            } else {
-                chartData.indicators.sma = false;
-                if (chartData.smaSeries) {
-                    chartData.smaSeries.applyOptions({ visible: false });
-                }
+                chartData.smaSeries.applyOptions({ visible: chartData.indicators.sma });
             }
             e.target.options[2].text = `SMA ${chartData.indicators.smaPeriod} (${chartData.indicators.sma ? 'On' : 'Off'})`;
         } else if (indicator === "ema") {
-            if (!chartData.indicators.ema) {
-                const input = prompt("Enter period for EMA:", chartData.indicators.emaPeriod);
-                const period = parseInt(input, 10);
-                if (input !== null && !isNaN(period) && period > 0) {
-                    chartData.indicators.emaPeriod = period;
-                    chartData.indicators.ema = true;
-                    if (chartData.emaSeries) {
-                        chartData.emaSeries.setData(calculateEMA(chartData.cachedData, period));
-                        chartData.emaSeries.applyOptions({ visible: true });
-                    }
+            chartData.indicators.ema = !chartData.indicators.ema;
+            if (chartData.emaSeries) {
+                if (chartData.indicators.ema) {
+                    chartData.emaSeries.setData(calculateEMA(chartData.cachedData, chartData.indicators.emaPeriod));
                 }
-            } else {
-                chartData.indicators.ema = false;
-                if (chartData.emaSeries) {
-                    chartData.emaSeries.applyOptions({ visible: false });
-                }
+                chartData.emaSeries.applyOptions({ visible: chartData.indicators.ema });
             }
             e.target.options[3].text = `EMA ${chartData.indicators.emaPeriod} (${chartData.indicators.ema ? 'On' : 'Off'})`;
+        } else if (indicator === "bb") {
+            chartData.indicators.bb = !chartData.indicators.bb;
+            if (chartData.bbUpperSeries) {
+                if (chartData.indicators.bb) {
+                    const bbData = calculateBB(chartData.cachedData, chartData.indicators.bbPeriod, chartData.indicators.bbStdDev);
+                    chartData.bbUpperSeries.setData(bbData.upper);
+                    chartData.bbMiddleSeries.setData(bbData.middle);
+                    chartData.bbLowerSeries.setData(bbData.lower);
+                }
+                chartData.bbUpperSeries.applyOptions({ visible: chartData.indicators.bb });
+                chartData.bbMiddleSeries.applyOptions({ visible: chartData.indicators.bb });
+                chartData.bbLowerSeries.applyOptions({ visible: chartData.indicators.bb });
+            }
+            e.target.options[4].text = `BB ${chartData.indicators.bbPeriod} (${chartData.indicators.bb ? 'On' : 'Off'})`;
+        } else if (indicator === "rsi") {
+            chartData.indicators.rsi = !chartData.indicators.rsi;
+            if (chartData.rsiSeries) {
+                if (chartData.indicators.rsi) {
+                    chartData.rsiSeries.setData(calculateRSI(chartData.cachedData, chartData.indicators.rsiPeriod));
+                    chartData.chart.priceScale('rsi').applyOptions({
+                        scaleMargins: { top: 0.8, bottom: 0 },
+                    });
+                }
+                chartData.rsiSeries.applyOptions({ visible: chartData.indicators.rsi });
+            }
+            e.target.options[5].text = `RSI ${chartData.indicators.rsiPeriod} (${chartData.indicators.rsi ? 'On' : 'Off'})`;
         }
         e.target.value = ""; // Reset the dropdown back to the "Indicators" placeholder
         saveLayoutState();
@@ -492,30 +535,67 @@ function initializeChart(chartData) {
         color: '#26a69a',
         priceFormat: { type: 'volume' },
         priceScaleId: '', // Place it on a separate, hidden scale
-        visible: chartData.indicators.volume,
+        visible: true, // Force visible on init to apply scale margins
     });
     chartData.volumeSeries.priceScale().applyOptions({
         scaleMargins: {
-            top: 0.8, // Push volume down to the bottom 20%
-            bottom: 0,
+            top: 0.7, // Push volume below the candles
+            bottom: 0.2, // Leave bottom 20% empty for RSI
         },
     });
+    if (!chartData.indicators.volume) {
+        chartData.volumeSeries.applyOptions({ visible: false });
+    }
 
     chartData.smaSeries = chartData.chart.addLineSeries({
-        color: '#f59e0b',
-        lineWidth: 1,
+        color: chartData.indicators.smaColor,
+        lineWidth: chartData.indicators.smaLineWidth,
         visible: chartData.indicators.sma,
         lastValueVisible: false,
         priceLineVisible: false,
     });
     
     chartData.emaSeries = chartData.chart.addLineSeries({
-        color: '#3b82f6',
-        lineWidth: 1,
+        color: chartData.indicators.emaColor,
+        lineWidth: chartData.indicators.emaLineWidth,
         visible: chartData.indicators.ema,
         lastValueVisible: false,
         priceLineVisible: false,
     });
+    
+    const bbOptions = {
+        color: chartData.indicators.bbColor, lineWidth: chartData.indicators.bbLineWidth,
+        visible: chartData.indicators.bb, lastValueVisible: false, priceLineVisible: false,
+    };
+    chartData.bbUpperSeries = chartData.chart.addLineSeries(bbOptions);
+    chartData.bbMiddleSeries = chartData.chart.addLineSeries(bbOptions);
+    chartData.bbLowerSeries = chartData.chart.addLineSeries(bbOptions);
+    
+    chartData.rsiSeries = chartData.chart.addLineSeries({
+        color: chartData.indicators.rsiColor, lineWidth: chartData.indicators.rsiLineWidth,
+        priceScaleId: 'rsi', visible: true, // Force visible on init to apply scale margins
+        lastValueVisible: false, priceLineVisible: false,
+        autoscaleInfoProvider: () => ({
+            priceRange: {
+                minValue: 0,
+                maxValue: 100,
+            },
+        }),
+    });
+    
+    chartData.chart.priceScale('rsi').applyOptions({
+        scaleMargins: { top: 0.8, bottom: 0 },
+    });
+    
+    if (!chartData.indicators.rsi) {
+        chartData.rsiSeries.applyOptions({ visible: false });
+    }
+    
+    // Add horizontal RSI bounds (70 Overbought / 30 Oversold)
+    if (chartData.rsiSeries.createPriceLine) {
+        chartData.rsiSeries.createPriceLine({ price: 70, color: '#ef4444', lineStyle: 2, axisLabelVisible: true, title: 'OB', lineWidth: 1 });
+        chartData.rsiSeries.createPriceLine({ price: 30, color: '#10b981', lineStyle: 2, axisLabelVisible: true, title: 'OS', lineWidth: 1 });
+    }
 }
 
 function resetChart(chartData) {
@@ -528,6 +608,10 @@ function resetChart(chartData) {
     if (chartData.volumeSeries) chartData.volumeSeries.setData([]);
     if (chartData.smaSeries) chartData.smaSeries.setData([]);
     if (chartData.emaSeries) chartData.emaSeries.setData([]);
+    if (chartData.bbUpperSeries) chartData.bbUpperSeries.setData([]);
+    if (chartData.bbMiddleSeries) chartData.bbMiddleSeries.setData([]);
+    if (chartData.bbLowerSeries) chartData.bbLowerSeries.setData([]);
+    if (chartData.rsiSeries) chartData.rsiSeries.setData([]);
     setPaneMessage(chartData.id, chartData.instrumentId === "none" ? "No Chart Selected" : "Loading");
     updateTicker(chartData, null, null);
 }
@@ -560,6 +644,15 @@ async function loadChartData(chartData) {
         }
         if (chartData.indicators.ema) {
             chartData.emaSeries.setData(calculateEMA(candles, chartData.indicators.emaPeriod));
+        }
+        if (chartData.indicators.bb) {
+            const bbData = calculateBB(candles, chartData.indicators.bbPeriod, chartData.indicators.bbStdDev);
+            chartData.bbUpperSeries.setData(bbData.upper);
+            chartData.bbMiddleSeries.setData(bbData.middle);
+            chartData.bbLowerSeries.setData(bbData.lower);
+        }
+        if (chartData.indicators.rsi) {
+            chartData.rsiSeries.setData(calculateRSI(candles, chartData.indicators.rsiPeriod));
         }
 
         chartData.chart.timeScale().applyOptions({ rightOffset: 25, barSpacing: 8 });
@@ -600,6 +693,7 @@ function normalizeCandle(candle) {
 function subscribeChart(chartData) {
     if (chartData.source !== "hyperliquid" || chartData.liveSubscribed) return;
     chartData.liveSubscribed = true;
+    
     fetch(`${CONFIG.API_BASE}/live/subscribe`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -637,6 +731,22 @@ function applyPriceUpdate(chartData, tick) {
         else chartData.cachedData.push(candle);
     }
 
+    chartData.flashDirection = chartData.lastPrice === null || price >= chartData.lastPrice ? "up" : "down";
+    chartData.lastPrice = price;
+    chartData.lastDirection = candle.close >= candle.open ? 'up' : 'down';
+
+    if (!chartData.pendingUpdate) {
+        chartData.pendingUpdate = true;
+        requestAnimationFrame(() => flushChartUpdate(chartData));
+    }
+}
+
+function flushChartUpdate(chartData) {
+    chartData.pendingUpdate = false;
+    
+    const candle = chartData.cachedData[chartData.cachedData.length - 1];
+    if (!candle) return;
+
     chartData.candleSeries.update(candle);
     
     if (chartData.indicators.volume) {
@@ -656,20 +766,33 @@ function applyPriceUpdate(chartData, tick) {
         const lastEma = calculateLatestEMA(chartData.cachedData, chartData.indicators.emaPeriod);
         if (lastEma) chartData.emaSeries.update(lastEma);
     }
+    
+    if (chartData.indicators.bb) {
+        const lastBB = calculateLatestBB(chartData.cachedData, chartData.indicators.bbPeriod, chartData.indicators.bbStdDev);
+        if (lastBB) {
+            chartData.bbUpperSeries.update(lastBB.upper);
+            chartData.bbMiddleSeries.update(lastBB.middle);
+            chartData.bbLowerSeries.update(lastBB.lower);
+        }
+    }
+    
+    if (chartData.indicators.rsi) {
+        const lastRsi = calculateLatestRSI(chartData.cachedData, chartData.indicators.rsiPeriod);
+        if (lastRsi) chartData.rsiSeries.update(lastRsi);
+    }
 
-    const isUp = candle.close >= candle.open;
-    chartData.lastDirection = isUp ? 'up' : 'down';
     chartData.candleSeries.applyOptions({
-        priceLineColor: isUp ? "#16a34a" : "#dc2626"
+        priceLineColor: chartData.lastDirection === 'up' ? "#16a34a" : "#dc2626"
     });
 
-    const direction = chartData.lastPrice === null || price >= chartData.lastPrice ? "up" : "down";
-    chartData.lastPrice = price;
-
     if (!document.hidden) {
-        updateTicker(chartData, price, chartData.referencePrice);
-        flashTicker(chartData.id, direction);
-        updateChartCountdown(chartData); // Only update this specific chart's timer!
+        const now = Date.now();
+        if (now - chartData.lastUIUpdate > 100) {
+            updateTicker(chartData, chartData.lastPrice, chartData.referencePrice);
+            flashTicker(chartData.id, chartData.flashDirection);
+            updateChartCountdown(chartData, now);
+            chartData.lastUIUpdate = now;
+        }
     }
 }
 
@@ -735,9 +858,14 @@ function updateTicker(chartData, price, reference) {
 function flashTicker(chartId, direction) {
     if (document.hidden) return; // Prevent layout thrashing when tab is hidden
     const ticker = document.getElementById(`${chartId}-ticker`);
+    if (!ticker) return;
+    const flashClass = direction === "up" ? "flash-up" : "flash-down";
+    
     ticker.classList.remove("flash-up", "flash-down");
-    void ticker.offsetWidth;
-    ticker.classList.add(direction === "up" ? "flash-up" : "flash-down");
+    
+    setTimeout(() => {
+        ticker.classList.add(flashClass);
+    }, 10);
 }
 
 function formatPrice(price) {
@@ -901,6 +1029,261 @@ function calculateEMA(data, period) {
     return ema;
 }
 
+function calculateBB(data, period, stdDevMult) {
+    const upper = [], middle = [], lower = [];
+    for (let i = period - 1; i < data.length; i++) {
+        let sum = 0;
+        for (let j = 0; j < period; j++) sum += data[i - j].close;
+        const sma = sum / period;
+        
+        let varianceSum = 0;
+        for (let j = 0; j < period; j++) {
+            varianceSum += Math.pow(data[i - j].close - sma, 2);
+        }
+        const stdDev = Math.sqrt(varianceSum / period);
+        
+        const time = data[i].time;
+        upper.push({ time, value: sma + stdDevMult * stdDev });
+        middle.push({ time, value: sma });
+        lower.push({ time, value: sma - stdDevMult * stdDev });
+    }
+    return { upper, middle, lower };
+}
+
+function calculateLatestBB(data, period, stdDevMult) {
+    if (data.length < period) return null;
+    let sum = 0;
+    for (let i = 0; i < period; i++) sum += data[data.length - 1 - i].close;
+    const sma = sum / period;
+    
+    let varianceSum = 0;
+    for (let i = 0; i < period; i++) varianceSum += Math.pow(data[data.length - 1 - i].close - sma, 2);
+    const stdDev = Math.sqrt(varianceSum / period);
+    
+    const time = data[data.length - 1].time;
+    return { upper: { time, value: sma + stdDevMult * stdDev }, middle: { time, value: sma }, lower: { time, value: sma - stdDevMult * stdDev } };
+}
+
+function calculateRSI(data, period) {
+    const rsi = [];
+    if (data.length < period + 1) return rsi;
+
+    let gains = 0, losses = 0;
+    for (let i = 1; i <= period; i++) {
+        const change = data[i].close - data[i - 1].close;
+        if (change >= 0) gains += change;
+        else losses -= change;
+    }
+
+    let avgGain = gains / period;
+    let avgLoss = losses / period;
+    let rsiValue = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+    if (avgGain === 0 && avgLoss === 0) rsiValue = 50;
+    rsi.push({ time: data[period].time, value: rsiValue });
+
+    for (let i = period + 1; i < data.length; i++) {
+        const change = data[i].close - data[i - 1].close;
+        const gain = change >= 0 ? change : 0;
+        const loss = change < 0 ? -change : 0;
+
+        avgGain = (avgGain * (period - 1) + gain) / period;
+        avgLoss = (avgLoss * (period - 1) + loss) / period;
+
+        rsiValue = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+        if (avgGain === 0 && avgLoss === 0) rsiValue = 50;
+        rsi.push({ time: data[i].time, value: rsiValue });
+    }
+    return rsi;
+}
+
+function calculateLatestRSI(data, period) {
+    const lookback = Math.min(data.length, period * 5);
+    if (lookback < period + 1) return null;
+    
+    const startIdx = data.length - lookback;
+    let gains = 0, losses = 0;
+    for (let i = startIdx + 1; i <= startIdx + period; i++) {
+        const change = data[i].close - data[i - 1].close;
+        if (change >= 0) gains += change;
+        else losses -= change;
+    }
+
+    let avgGain = gains / period;
+    let avgLoss = losses / period;
+    let rsiValue = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+    if (avgGain === 0 && avgLoss === 0) rsiValue = 50;
+
+    for (let i = startIdx + period + 1; i < data.length; i++) {
+        const change = data[i].close - data[i - 1].close;
+        const gain = change >= 0 ? change : 0;
+        const loss = change < 0 ? -change : 0;
+
+        avgGain = (avgGain * (period - 1) + gain) / period;
+        avgLoss = (avgLoss * (period - 1) + loss) / period;
+
+        rsiValue = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
+        if (avgGain === 0 && avgLoss === 0) rsiValue = 50;
+    }
+    return { time: data[data.length - 1].time, value: rsiValue };
+}
+
+function openSettingsModal(chartData) {
+    let modal = document.getElementById("chart-settings-modal");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "chart-settings-modal";
+        modal.className = "settings-modal-overlay";
+        document.body.appendChild(modal);
+    }
+
+    modal.innerHTML = `
+        <div class="settings-modal-content">
+            <h3>Chart Settings</h3>
+            <div class="settings-group">
+                <label>SMA Period</label>
+                <input type="number" id="sma-period-input" value="${chartData.indicators.smaPeriod}" min="1">
+            </div>
+            <div class="settings-group">
+                <label>SMA Color</label>
+                <input type="color" id="sma-color-input" value="${chartData.indicators.smaColor}">
+            </div>
+            <div class="settings-group">
+                <label>SMA Thickness</label>
+                <select id="sma-width-input">
+                    <option value="1" ${chartData.indicators.smaLineWidth == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${chartData.indicators.smaLineWidth == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${chartData.indicators.smaLineWidth == 3 ? 'selected' : ''}>Thick</option>
+                </select>
+            </div>
+            <div class="settings-group">
+                <label>EMA Period</label>
+                <input type="number" id="ema-period-input" value="${chartData.indicators.emaPeriod}" min="1">
+            </div>
+            <div class="settings-group">
+                <label>EMA Color</label>
+                <input type="color" id="ema-color-input" value="${chartData.indicators.emaColor}">
+            </div>
+            <div class="settings-group">
+                <label>EMA Thickness</label>
+                <select id="ema-width-input">
+                    <option value="1" ${chartData.indicators.emaLineWidth == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${chartData.indicators.emaLineWidth == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${chartData.indicators.emaLineWidth == 3 ? 'selected' : ''}>Thick</option>
+                </select>
+            </div>
+            <div class="settings-group">
+                <label>BB Period</label>
+                <input type="number" id="bb-period-input" value="${chartData.indicators.bbPeriod}" min="1">
+            </div>
+            <div class="settings-group">
+                <label>BB Std Dev</label>
+                <input type="number" id="bb-stddev-input" value="${chartData.indicators.bbStdDev}" min="0.1" step="0.1">
+            </div>
+            <div class="settings-group">
+                <label>BB Color</label>
+                <input type="color" id="bb-color-input" value="${chartData.indicators.bbColor}">
+            </div>
+            <div class="settings-group">
+                <label>BB Thickness</label>
+                <select id="bb-width-input">
+                    <option value="1" ${chartData.indicators.bbLineWidth == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${chartData.indicators.bbLineWidth == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${chartData.indicators.bbLineWidth == 3 ? 'selected' : ''}>Thick</option>
+                </select>
+            </div>
+            <div class="settings-group">
+                <label>RSI Period</label>
+                <input type="number" id="rsi-period-input" value="${chartData.indicators.rsiPeriod}" min="1">
+            </div>
+            <div class="settings-group">
+                <label>RSI Color</label>
+                <input type="color" id="rsi-color-input" value="${chartData.indicators.rsiColor}">
+            </div>
+            <div class="settings-group">
+                <label>RSI Thickness</label>
+                <select id="rsi-width-input">
+                    <option value="1" ${chartData.indicators.rsiLineWidth == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${chartData.indicators.rsiLineWidth == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${chartData.indicators.rsiLineWidth == 3 ? 'selected' : ''}>Thick</option>
+                </select>
+            </div>
+            <div class="settings-actions">
+                <button id="settings-cancel-btn">Cancel</button>
+                <button id="settings-save-btn">Save</button>
+            </div>
+        </div>
+    `;
+    
+    modal.style.display = "flex";
+
+    document.getElementById("settings-cancel-btn").onclick = () => {
+        modal.style.display = "none";
+    };
+
+    document.getElementById("settings-save-btn").onclick = () => {
+        const smaPeriod = parseInt(document.getElementById("sma-period-input").value, 10);
+        const emaPeriod = parseInt(document.getElementById("ema-period-input").value, 10);
+        const bbPeriod = parseInt(document.getElementById("bb-period-input").value, 10);
+        const bbStdDev = parseFloat(document.getElementById("bb-stddev-input").value);
+        const rsiPeriod = parseInt(document.getElementById("rsi-period-input").value, 10);
+        
+        if (!isNaN(smaPeriod) && smaPeriod > 0) chartData.indicators.smaPeriod = smaPeriod;
+        if (!isNaN(emaPeriod) && emaPeriod > 0) chartData.indicators.emaPeriod = emaPeriod;
+        if (!isNaN(bbPeriod) && bbPeriod > 0) chartData.indicators.bbPeriod = bbPeriod;
+        if (!isNaN(bbStdDev) && bbStdDev > 0) chartData.indicators.bbStdDev = bbStdDev;
+        if (!isNaN(rsiPeriod) && rsiPeriod > 0) chartData.indicators.rsiPeriod = rsiPeriod;
+        
+        chartData.indicators.smaColor = document.getElementById("sma-color-input").value;
+        chartData.indicators.emaColor = document.getElementById("ema-color-input").value;
+        chartData.indicators.bbColor = document.getElementById("bb-color-input").value;
+        chartData.indicators.rsiColor = document.getElementById("rsi-color-input").value;
+        chartData.indicators.smaLineWidth = parseInt(document.getElementById("sma-width-input").value, 10);
+        chartData.indicators.emaLineWidth = parseInt(document.getElementById("ema-width-input").value, 10);
+        chartData.indicators.bbLineWidth = parseInt(document.getElementById("bb-width-input").value, 10);
+        chartData.indicators.rsiLineWidth = parseInt(document.getElementById("rsi-width-input").value, 10);
+
+        if (chartData.smaSeries) {
+            chartData.smaSeries.applyOptions({ color: chartData.indicators.smaColor, lineWidth: chartData.indicators.smaLineWidth });
+            if (chartData.indicators.sma) chartData.smaSeries.setData(calculateSMA(chartData.cachedData, chartData.indicators.smaPeriod));
+        }
+        if (chartData.emaSeries) {
+            chartData.emaSeries.applyOptions({ color: chartData.indicators.emaColor, lineWidth: chartData.indicators.emaLineWidth });
+            if (chartData.indicators.ema) chartData.emaSeries.setData(calculateEMA(chartData.cachedData, chartData.indicators.emaPeriod));
+        }
+        if (chartData.bbUpperSeries) {
+            const bbOpts = { color: chartData.indicators.bbColor, lineWidth: chartData.indicators.bbLineWidth };
+            chartData.bbUpperSeries.applyOptions(bbOpts);
+            chartData.bbMiddleSeries.applyOptions(bbOpts);
+            chartData.bbLowerSeries.applyOptions(bbOpts);
+            if (chartData.indicators.bb) {
+                const bbData = calculateBB(chartData.cachedData, chartData.indicators.bbPeriod, chartData.indicators.bbStdDev);
+                chartData.bbUpperSeries.setData(bbData.upper);
+                chartData.bbMiddleSeries.setData(bbData.middle);
+                chartData.bbLowerSeries.setData(bbData.lower);
+            }
+        }
+        if (chartData.rsiSeries) {
+            chartData.rsiSeries.applyOptions({ color: chartData.indicators.rsiColor, lineWidth: chartData.indicators.rsiLineWidth });
+            if (chartData.indicators.rsi) {
+                chartData.rsiSeries.setData(calculateRSI(chartData.cachedData, chartData.indicators.rsiPeriod));
+                chartData.chart.priceScale('rsi').applyOptions({
+                    scaleMargins: { top: 0.8, bottom: 0 },
+                });
+            }
+        }
+
+        const select = document.querySelector(`#${chartData.id} .indicator-select`);
+        if (select) {
+            select.options[2].text = `SMA ${chartData.indicators.smaPeriod} (${chartData.indicators.sma ? 'On' : 'Off'})`;
+            select.options[3].text = `EMA ${chartData.indicators.emaPeriod} (${chartData.indicators.ema ? 'On' : 'Off'})`;
+            select.options[4].text = `BB ${chartData.indicators.bbPeriod} (${chartData.indicators.bb ? 'On' : 'Off'})`;
+            select.options[5].text = `RSI ${chartData.indicators.rsiPeriod} (${chartData.indicators.rsi ? 'On' : 'Off'})`;
+        }
+        saveLayoutState();
+        modal.style.display = "none";
+    };
+}
+
 function injectThemeStyles() {
     const style = document.createElement('style');
     style.id = "theme-styles";
@@ -937,11 +1320,6 @@ function injectThemeStyles() {
         body.light-theme .ticker-symbol {
             color: var(--text-primary);
         }
-        body.light-theme .countdown-timer {
-            background-color: rgba(255, 255, 255, 0.9);
-            border-color: #cbd5e1;
-            color: #0f172a;
-        }
         .theme-btn {
             background-color: #2a3f5f;
             color: #ffffff;
@@ -959,6 +1337,106 @@ function injectThemeStyles() {
             border-color: #cbd5e1;
         }
         body.light-theme .theme-btn:hover { background-color: #cbd5e1; }
+        .settings-modal-overlay {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.7);
+            display: none;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .settings-modal-content {
+            background: #151b23;
+            padding: 24px;
+            border-radius: 8px;
+            border: 1px solid #394654;
+            width: 320px;
+            max-height: 85vh;
+            overflow-y: auto;
+            color: #d8dee8;
+            font-family: inherit;
+        }
+        body.light-theme .settings-modal-content {
+            background: #ffffff;
+            border-color: #cbd5e1;
+            color: #0f172a;
+        }
+        .settings-modal-content h3 {
+            margin-top: 0;
+            margin-bottom: 16px;
+            font-size: 16px;
+        }
+        .settings-group {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }
+        .settings-group label {
+            font-size: 13px;
+        }
+        .settings-group input[type="number"], .settings-group select {
+            width: 80px;
+            background: #0f1419;
+            color: #d8dee8;
+            border: 1px solid #394654;
+            border-radius: 4px;
+            padding: 4px;
+            font-size: 13px;
+        }
+        body.light-theme .settings-group input[type="number"], body.light-theme .settings-group select {
+            background: #f1f5f9;
+            color: #0f172a;
+            border-color: #cbd5e1;
+        }
+        .settings-group input[type="color"] {
+            width: 40px;
+            height: 24px;
+            padding: 0;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            background: transparent;
+        }
+        .settings-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+            margin-top: 20px;
+        }
+        .settings-actions button {
+            padding: 6px 16px;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            font-family: inherit;
+            font-size: 13px;
+        }
+        #settings-cancel-btn {
+            background: #394654;
+            color: white;
+        }
+        body.light-theme #settings-cancel-btn {
+            background: #e2e8f0;
+            color: #0f172a;
+        }
+        #settings-save-btn {
+            background: #10b981;
+            color: white;
+        }
+        .settings-btn {
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 4px;
+            margin-left: 4px;
+            opacity: 0.7;
+        }
+        .settings-btn:hover {
+            opacity: 1;
+        }
     `;
     document.head.appendChild(style);
 }

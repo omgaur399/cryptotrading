@@ -100,6 +100,10 @@ if (!window.LightweightCharts) {
                 return series;
             }
 
+            priceScale(id) {
+                return { applyOptions: () => {} };
+            }
+
             timeScale() {
                 return { 
                     fitContent: () => {},
@@ -310,6 +314,7 @@ if (!window.LightweightCharts) {
                 this.options = options;
                 this.data = [];
                 this.group = document.createElementNS(SVG_NS, "g");
+                this.priceLines = [];
                 this.chart.plotGroup.appendChild(this.group);
             }
 
@@ -333,6 +338,13 @@ if (!window.LightweightCharts) {
                 this.chart._redraw();
             }
 
+            createPriceLine(options) {
+                const pl = { options, applyOptions: () => {} };
+                this.priceLines.push(pl);
+                this.chart._redraw();
+                return pl;
+            }
+
             _draw() {
                 clear(this.group);
                 if (!this.data.length || this.options.visible === false) return;
@@ -341,14 +353,48 @@ if (!window.LightweightCharts) {
                 if (!candleSeries || !candleSeries.visibleCandles || !candleSeries.scaleY) return;
 
                 const { visibleCandles, plot, slot, scaleY } = candleSeries;
+                let seriesScaleY = scaleY;
                 
+                if (this.options.priceScaleId === 'rsi') {
+                    const plotHeight = Math.max(this.chart.height - plot.top - plot.bottom, 120);
+                    const rsiTop = plot.top + plotHeight * 0.8;
+                    const rsiBottom = plot.top + plotHeight;
+                    seriesScaleY = val => rsiBottom - ((val / 100) * (rsiBottom - rsiTop));
+                }
+                
+                if (this.priceLines && this.priceLines.length > 0) {
+                    this.priceLines.forEach(pl => {
+                        const y = seriesScaleY(pl.options.price);
+                        const plLine = document.createElementNS(SVG_NS, "line");
+                        plLine.setAttribute("x1", plot.left);
+                        plLine.setAttribute("y1", y);
+                        plLine.setAttribute("x2", this.chart.width - plot.right);
+                        plLine.setAttribute("y2", y);
+                        plLine.setAttribute("stroke", pl.options.color || "#ffffff");
+                        plLine.setAttribute("stroke-width", pl.options.lineWidth || 1);
+                        if (pl.options.lineStyle === 2) plLine.setAttribute("stroke-dasharray", "4,4");
+                        this.group.appendChild(plLine);
+                        
+                        if (pl.options.axisLabelVisible) {
+                            const text = document.createElementNS(SVG_NS, "text");
+                            text.setAttribute("x", this.chart.width - 6);
+                            text.setAttribute("y", y + 4);
+                            text.setAttribute("fill", pl.options.color || "#ffffff");
+                            text.setAttribute("font-size", "10");
+                            text.setAttribute("text-anchor", "end");
+                            text.textContent = pl.options.title || pl.options.price;
+                            this.chart.axisGroup.appendChild(text);
+                        }
+                    });
+                }
+
                 let pathD = "";
                 
                 visibleCandles.forEach((candle, index) => {
                     const point = this.data.find(p => p.time === candle.time);
                     if (point) {
                         const x = plot.left + slot * index + slot / 2;
-                        const y = scaleY(point.value);
+                        const y = seriesScaleY(point.value);
                         if (!pathD) pathD = `M ${x} ${y}`;
                         else pathD += ` L ${x} ${y}`;
                     }
