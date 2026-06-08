@@ -54,6 +54,7 @@ const state = {
     instruments: [],
     charts: {},
     liveStream: null,
+    hlWs: null,
     connected: false,
     theme: "dark",
 };
@@ -150,7 +151,7 @@ async function loadInstruments() {
         // Fallback master list just in case of an ad-blocker or network hiccup
         hyperliquidPairs = [
             "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT",
-            "MATIC", "TON", "SHIB", "LTC", "TRX", "NEAR", "APT", "ARB", "OP", "SUI",
+            "POL", "TON", "SHIB", "LTC", "TRX", "NEAR", "APT", "ARB", "OP", "SUI",
             "INJ", "TIA", "RNDR", "SEI", "DYDX", "FIL", "KAS", "STX", "LDO", "FET",
             "RUNE", "WLD", "IMX", "HYPE", "PEPE", "WIF", "JUP", "PYTH", "BONK", "ORDI",
             "BCH", "ETC", "XMR", "XLM", "HBAR", "VET", "ALGO", "GRT", "EGLD", "AAVE",
@@ -175,18 +176,46 @@ async function loadInstruments() {
 }
 
 function connectLiveStream() {
-    if (!window.EventSource) {
-        updateConnectionStatus(false);
-        return;
+    // Legacy Backend SSE for Yahoo Finance
+    if (window.EventSource && !state.liveStream) {
+        state.liveStream = new EventSource(`${CONFIG.API_BASE}/live`);
+        state.liveStream.onopen = () => updateConnectionStatus(true);
+        state.liveStream.onerror = () => updateConnectionStatus(false);
+        state.liveStream.onmessage = event => {
+            if (!event.data) return;
+            handlePriceUpdate(JSON.parse(event.data));
+        };
     }
 
-    state.liveStream = new EventSource(`${CONFIG.API_BASE}/live`);
-    state.liveStream.onopen = () => updateConnectionStatus(true);
-    state.liveStream.onerror = () => updateConnectionStatus(false);
-    state.liveStream.onmessage = event => {
-        if (!event.data) return;
-        handlePriceUpdate(JSON.parse(event.data));
-    };
+    // Native Hyperliquid WebSocket for all Crypto pairs
+    if (!state.hlWs) {
+        state.hlWs = new WebSocket('wss://api.hyperliquid.xyz/ws');
+        state.hlWs.onopen = () => {
+            updateConnectionStatus(true);
+            Object.values(state.charts).forEach(chartData => {
+                if (chartData.source === 'hyperliquid' && chartData.symbol !== 'none') {
+                    subscribeChart(chartData);
+                }
+            });
+        };
+        state.hlWs.onclose = () => {
+            state.hlWs = null;
+            setTimeout(connectLiveStream, 5000); // Reconnect loop
+        };
+        state.hlWs.onmessage = event => {
+            const data = JSON.parse(event.data);
+            if (data.channel === 'trades' && data.data) {
+                data.data.forEach(trade => {
+                    handlePriceUpdate({
+                        source: 'hyperliquid',
+                        symbol: trade.coin,
+                        price: parseFloat(trade.px),
+                        time: trade.time / 1000
+                    });
+                });
+            }
+        };
+    }
 }
 
 function setChartCount(count) {
@@ -198,10 +227,11 @@ function setChartCount(count) {
 
 function renderGrid() {
     const grid = document.getElementById("charts-grid");
-    grid.className = `charts-grid layout-${state.chartCount}`;
+    grid.className = `charts-grid layout-${state.chartCount}${state.chartCount === 1 ? ' with-info-panel' : ''}`;
     grid.innerHTML = "";
 
     Object.values(state.charts).forEach(chartData => {
+        unsubscribeChart(chartData);
         if (chartData.chart) chartData.chart.remove();
     });
     state.charts = {};
@@ -289,6 +319,14 @@ function renderGrid() {
         initializeChart(chartData);
         populatePaneControls(chartData);
         loadChartData(chartData);
+    }
+
+    if (state.chartCount === 1) {
+        grid.appendChild(createInfoPanel());
+        const chartData = state.charts['chart-1'];
+        if (chartData && chartData.symbol !== 'none' && chartData.symbol !== 'No Chart') {
+            fetchAndRenderAssetInfo(chartData.symbol);
+        }
     }
 }
 
@@ -392,6 +430,9 @@ function populatePaneControls(chartData) {
                     chartData.symbol = "No Chart";
                     resetChart(chartData);
                     saveLayoutState();
+                    if (state.chartCount === 1 && chartData.id === 'chart-1') {
+                        clearInfoPanel();
+                    }
                 }
             } else {
                 const instrument = state.instruments.find(item => item.id === selectedId);
@@ -408,6 +449,9 @@ function populatePaneControls(chartData) {
                     resetChart(chartData);
                     loadChartData(chartData);
                     saveLayoutState();
+                    if (state.chartCount === 1 && chartData.id === 'chart-1') {
+                        fetchAndRenderAssetInfo(chartData.symbol);
+                    }
                 }
             }
             input.value = chartData.symbol;
@@ -507,7 +551,7 @@ function initializeChart(chartData) {
             secondsVisible: false,
             borderColor: themeOptions.timeScale.borderColor,
             tickMarkFormatter: TimeUtils.formatAxis,
-            rightOffset: 25,
+            rightOffset: 35,
             barSpacing: 8,
             shiftVisibleRangeOnNewBar: true,
         },
@@ -527,7 +571,7 @@ function initializeChart(chartData) {
             upColor: "#16a34a", downColor: "#dc2626",
             wickUpColor: "#16a34a", wickDownColor: "#dc2626",
             borderVisible: false, priceLineVisible: true,
-            priceLineColor: "#16a34a", priceLineWidth: 1, priceLineStyle: 1,
+            priceLineColor: "#16a34a", priceLineWidth: 1, priceLineStyle: 2,
             lastValueVisible: false,
         });
 
@@ -623,13 +667,69 @@ async function loadChartData(chartData) {
     }
     try {
         setDataStatus(`Loading ${chartData.symbol} ${chartData.interval}`);
-        const response = await fetch(`${CONFIG.API_BASE}/data/${chartData.source}/${chartData.symbol}/${chartData.interval}`);
-        const payload = await response.json();
-        if (!response.ok || !payload.candles || payload.candles.length === 0) {
-            throw new Error(payload.error || "No candles available");
+        
+        let candles = [];
+        
+        if (chartData.source === "hyperliquid") {
+            let hlData = [];
+            try {
+                const intervalMap = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400 };
+                const seconds = intervalMap[chartData.interval] || 3600;
+                const startTime = Date.now() - (seconds * 500 * 1000);
+                
+                const res = await fetch("https://api.hyperliquid.xyz/info", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                        type: "candleSnapshot",
+                        req: { coin: chartData.symbol, interval: chartData.interval, startTime: startTime }
+                    })
+                });
+                
+                if (res.ok) hlData = await res.json();
+            } catch (e) {
+                console.warn("Hyperliquid fetch failed", e);
+            }
+            
+            if (Array.isArray(hlData) && hlData.length > 0) {
+                candles = hlData.map(c => normalizeCandle({
+                    time: c.t / 1000,
+                    open: c.o,
+                    high: c.h,
+                    low: c.l,
+                    close: c.c,
+                    volume: c.v
+                })).filter(Boolean);
+            } else {
+                console.warn(`No candles from Hyperliquid for ${chartData.symbol}, trying Binance Spot...`);
+                let cleanSymbol = chartData.symbol.toUpperCase();
+                if (cleanSymbol === 'MATIC') cleanSymbol = 'POL';
+                if (cleanSymbol.startsWith('1000')) cleanSymbol = cleanSymbol.replace(/^1000/, '');
+                
+                const bRes = await fetch(`https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}USDT&interval=${chartData.interval}&limit=500`);
+                if (!bRes.ok) throw new Error(`No candle data for ${chartData.symbol}`);
+                const bData = await bRes.json();
+                
+                candles = bData.map(c => normalizeCandle({
+                    time: c[0] / 1000,
+                    open: c[1],
+                    high: c[2],
+                    low: c[3],
+                    close: c[4],
+                    volume: c[5]
+                })).filter(Boolean);
+            }
+        } else {
+            const response = await fetch(`${CONFIG.API_BASE}/data/${chartData.source}/${chartData.symbol}/${chartData.interval}`);
+            const payload = await response.json();
+            if (!response.ok || !payload.candles || payload.candles.length === 0) {
+                throw new Error(payload.error || "No candles available");
+            }
+            candles = payload.candles.map(normalizeCandle).filter(Boolean);
         }
 
-        const candles = payload.candles.map(normalizeCandle).filter(Boolean);
+        if (candles.length === 0) throw new Error("No valid candle data parsed");
+        
         chartData.cachedData = candles;
 
         chartData.candleSeries.setData(candles);
@@ -655,7 +755,7 @@ async function loadChartData(chartData) {
             chartData.rsiSeries.setData(calculateRSI(candles, chartData.indicators.rsiPeriod));
         }
 
-        chartData.chart.timeScale().applyOptions({ rightOffset: 25, barSpacing: 8 });
+        chartData.chart.timeScale().applyOptions({ rightOffset: 35, barSpacing: 8 });
         chartData.chart.timeScale().scrollToRealTime();
 
         chartData.currentCandle = candles[candles.length - 1];
@@ -691,24 +791,42 @@ function normalizeCandle(candle) {
 }
 
 function subscribeChart(chartData) {
-    if (chartData.source !== "hyperliquid" || chartData.liveSubscribed) return;
-    chartData.liveSubscribed = true;
+    if (chartData.liveSubscribed || chartData.symbol === "No Chart" || chartData.symbol === "none") return;
     
-    fetch(`${CONFIG.API_BASE}/live/subscribe`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            source: chartData.source,
-            symbol: chartData.symbol,
-        }),
-    }).catch(error => {
-        chartData.liveSubscribed = false;
-        console.warn("Live subscribe failed", error);
-        updateConnectionStatus(false);
-    });
+    if (chartData.source === "hyperliquid") {
+        if (state.hlWs && state.hlWs.readyState === WebSocket.OPEN) {
+            state.hlWs.send(JSON.stringify({
+                method: "subscribe",
+                subscription: { type: "trades", coin: chartData.symbol }
+            }));
+            chartData.liveSubscribed = true;
+        }
+    } else {
+        chartData.liveSubscribed = true;
+        fetch(`${CONFIG.API_BASE}/live/subscribe`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ source: chartData.source, symbol: chartData.symbol }),
+        }).catch(error => {
+            chartData.liveSubscribed = false;
+            console.warn("Live subscribe failed", error);
+        });
+    }
 }
 
-function unsubscribeChart() {}
+function unsubscribeChart(chartData) {
+    if (!chartData.liveSubscribed || chartData.symbol === "No Chart" || chartData.symbol === "none") return;
+    
+    if (chartData.source === "hyperliquid") {
+        if (state.hlWs && state.hlWs.readyState === WebSocket.OPEN) {
+            state.hlWs.send(JSON.stringify({
+                method: "unsubscribe",
+                subscription: { type: "trades", coin: chartData.symbol }
+            }));
+        }
+    }
+    chartData.liveSubscribed = false;
+}
 
 function handlePriceUpdate(tick) {
     Object.values(state.charts).forEach(chartData => {
@@ -792,6 +910,10 @@ function flushChartUpdate(chartData) {
             flashTicker(chartData.id, chartData.flashDirection);
             updateChartCountdown(chartData, now);
             chartData.lastUIUpdate = now;
+            
+            if (state.chartCount === 1 && chartData.id === 'chart-1') {
+                updateInfoPanelPrice(chartData.lastPrice);
+            }
         }
     }
 }
@@ -851,7 +973,7 @@ function updateTicker(chartData, price, reference) {
     pane.querySelector(".ticker-symbol").textContent = `${chartData.symbol} ${chartData.interval}`;
     pane.querySelector(".ticker-price").textContent = formatPrice(price);
     pane.querySelector(".ticker-price").className = `ticker-price ${direction}`;
-    pane.querySelector(".ticker-change").textContent = `${change >= 0 ? "+" : ""}${change.toFixed(2)}%`;
+    pane.querySelector(".ticker-change").textContent = `${change >= 0 ? "+" : ""}${change.toFixed(2)}% (${chartData.interval})`;
     pane.querySelector(".ticker-change").className = `ticker-change ${direction}`;
 }
 
@@ -1437,6 +1559,170 @@ function injectThemeStyles() {
         .settings-btn:hover {
             opacity: 1;
         }
+        /* Asset Info Panel Styles */
+        .charts-grid.layout-1.with-info-panel {
+            display: grid;
+            grid-template-columns: 78% calc(22% - 12px);
+            gap: 12px;
+            /* Lock grid height to screen view to prevent panel from stretching it */
+            height: calc(100vh - 100px);
+        }
+        /* Force children to respect grid height so overflow scrolling kicks in */
+        .charts-grid.layout-1.with-info-panel > * {
+            min-height: 0;
+        }
+        .charts-grid.layout-1.with-info-panel .chart-pane {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+        .charts-grid.layout-1.with-info-panel .chart-container {
+            flex: 1;
+            min-height: 0;
+        }
+        @media (max-width: 1024px) {
+            .charts-grid.layout-1.with-info-panel {
+                grid-template-columns: 1fr;
+                height: auto;
+            }
+            .charts-grid.layout-1.with-info-panel .chart-pane {
+                height: 60vh;
+            }
+        }
+        .asset-info-panel {
+            background-color: #151b23;
+            border: 1px solid #394654;
+            border-radius: 8px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            color: #d8dee8;
+            font-family: inherit;
+            height: 100%;
+        }
+        body.light-theme .asset-info-panel {
+            background-color: #ffffff;
+            border-color: #cbd5e1;
+            color: #0f172a;
+        }
+        .info-panel-content {
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+        }
+        .info-panel-message {
+            text-align: center;
+            padding: 40px 20px;
+            color: #8b9bb0;
+            font-size: 14px;
+        }
+        .info-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .info-logo {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            font-size: 18px;
+            color: #fff;
+        }
+        .info-title h2 {
+            margin: 0;
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .info-symbol {
+            font-size: 13px;
+            color: #8b9bb0;
+            text-transform: uppercase;
+        }
+        .info-price-section {
+            display: flex;
+            align-items: baseline;
+            gap: 12px;
+        }
+        .info-price {
+            font-size: 28px;
+            font-weight: 700;
+        }
+        .info-change {
+            font-size: 14px;
+            font-weight: 600;
+            padding: 4px 8px;
+            border-radius: 4px;
+        }
+        .perf-up {
+            color: #10b981;
+            background: rgba(16, 185, 129, 0.1);
+        }
+        .perf-down {
+            color: #ef4444;
+            background: rgba(239, 68, 68, 0.1);
+        }
+        .info-section h3 {
+            margin: 0 0 12px 0;
+            font-size: 14px;
+            color: #8b9bb0;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            border-bottom: 1px solid #394654;
+            padding-bottom: 6px;
+        }
+        body.light-theme .info-section h3 {
+            color: #64748b;
+            border-bottom-color: #cbd5e1;
+        }
+        .info-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px 16px;
+        }
+        .info-item {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .info-label {
+            font-size: 12px;
+            color: #8b9bb0;
+        }
+        body.light-theme .info-label {
+            color: #64748b;
+        }
+        .info-value {
+            font-size: 14px;
+            font-weight: 500;
+        }
+        .perf-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
+            gap: 8px;
+        }
+        .perf-card {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 8px 4px;
+            border-radius: 6px;
+            gap: 4px;
+        }
+        .perf-period {
+            font-size: 11px;
+            opacity: 0.8;
+            font-weight: 600;
+        }
+        .perf-val {
+            font-size: 13px;
+            font-weight: 600;
+        }
     `;
     document.head.appendChild(style);
 }
@@ -1474,4 +1760,349 @@ function getChartThemeOptions(isLight) {
             vertLine: { color: isLight ? "#64748b" : "#8b9bb0", style: 2, labelBackgroundColor: isLight ? "#334155" : "#151b23" }
         }
     };
+}
+
+const assetInfoCache = {};
+
+function createInfoPanel() {
+    const panel = document.createElement('aside');
+    panel.id = 'asset-info-panel';
+    panel.className = 'asset-info-panel';
+    panel.innerHTML = `
+        <div class="info-panel-content">
+            <div id="info-panel-loading" class="info-panel-message">Loading Asset Info...</div>
+            <div id="info-panel-data" style="display: none;"></div>
+        </div>
+    `;
+    return panel;
+}
+
+function clearInfoPanel() {
+    const dataContainer = document.getElementById('info-panel-data');
+    const loadingContainer = document.getElementById('info-panel-loading');
+    if (dataContainer && loadingContainer) {
+        dataContainer.style.display = 'none';
+        loadingContainer.style.display = 'block';
+        loadingContainer.textContent = 'No Chart Selected';
+    }
+}
+
+async function fetchAndRenderAssetInfo(symbol, forceRefresh = false) {
+    const dataContainer = document.getElementById('info-panel-data');
+    const loadingContainer = document.getElementById('info-panel-loading');
+    if (!dataContainer || !loadingContainer) return;
+
+    loadingContainer.style.display = 'block';
+    loadingContainer.textContent = 'Loading Asset Info...';
+    dataContainer.style.display = 'none';
+
+    if (forceRefresh || !assetInfoCache[symbol] || assetInfoCache[symbol].isPartial) {
+        try {
+            // Clean up the symbol for searching (e.g., BTC-USD -> btc, BTCUSDT -> btc)
+            let cleanSymbol = symbol.split('-')[0].replace(/USDT$/, '').replace(/USD$/, '');
+            if (cleanSymbol.startsWith('1000')) cleanSymbol = cleanSymbol.replace(/^1000/, ''); // Fix meme coins
+            if (cleanSymbol.toUpperCase() === 'MATIC') cleanSymbol = 'POL';
+            
+            // 1. Resolve Coin ID
+            let coinId = null;
+            
+            // Hardcoded map for popular coins to avoid rate-limiting the search endpoint
+            const COMMON_IDS = {
+                "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "BNB": "binancecoin", "XRP": "ripple",
+                "DOGE": "dogecoin", "ADA": "cardano", "AVAX": "avalanche-2", "LINK": "chainlink", "DOT": "polkadot",
+                "POL": "polygon-ecosystem-token", "TON": "the-open-network", "SHIB": "shiba-inu", "LTC": "litecoin",
+                "TRX": "tron", "NEAR": "near", "APT": "aptos", "ARB": "arbitrum", "OP": "optimism", "SUI": "sui",
+                "INJ": "injective-protocol", "TIA": "celestia", "RNDR": "render-token", "SEI": "sei-network",
+                "DYDX": "dydx", "FIL": "filecoin", "KAS": "kaspa", "STX": "blockstack", "LDO": "lido-dao",
+                "FET": "fetch-ai", "RUNE": "thorchain", "WLD": "worldcoin-wld", "IMX": "immutable-x",
+                "PEPE": "pepe", "WIF": "dogwifcoin", "JUP": "jupiter-exchange-solana", "PYTH": "pyth-network",
+                "BONK": "bonk", "ORDI": "ordi", "BCH": "bitcoin-cash", "ETC": "ethereum-classic", "XMR": "monero",
+                "XLM": "stellar", "HBAR": "hedera-hashgraph", "VET": "vechain", "ALGO": "algorand", "GRT": "the-graph",
+                "EGLD": "elrond-erd-2", "AAVE": "aave", "SNX": "havven", "THETA": "theta-token", "EOS": "eos",
+                "XTZ": "tezos", "MANA": "decentraland", "SAND": "the-sandbox", "AXS": "axie-infinity",
+                "GALA": "gala", "CRV": "curve-dao-token", "MKR": "maker", "STRK": "starknet", "ENA": "ethena"
+            };
+
+            const upperClean = cleanSymbol.toUpperCase();
+            if (COMMON_IDS[upperClean]) {
+                coinId = COMMON_IDS[upperClean];
+            } else {
+                const searchRes = await fetch(`https://api.coingecko.com/api/v3/search?query=${cleanSymbol}`);
+                if (!searchRes.ok) throw new Error('Search failed');
+                const searchData = await searchRes.json();
+                
+                if (searchData.coins && searchData.coins.length > 0) {
+                    const exactMatches = searchData.coins.filter(c => c.symbol.toLowerCase() === cleanSymbol.toLowerCase());
+                    if (exactMatches.length > 0) {
+                        exactMatches.sort((a, b) => (a.market_cap_rank || Infinity) - (b.market_cap_rank || Infinity));
+                        coinId = exactMatches[0].id;
+                    } else {
+                        coinId = searchData.coins[0].id;
+                    }
+                } else {
+                    throw new Error('Coin not found');
+                }
+            }
+
+            // 2. Fetch the detailed market data
+            const res = await fetch(`https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false`);
+            if (!res.ok) throw new Error('Details failed');
+            const data = await res.json();
+            
+            const md = data.market_data || {};
+            
+            assetInfoCache[symbol] = {
+                symbol: data.symbol.toUpperCase(),
+                name: data.name,
+                price: md.current_price?.usd ?? null,
+                change24: md.price_change_percentage_24h ?? null,
+                marketCap: md.market_cap?.usd ?? null,
+                vol24: md.total_volume?.usd ?? null,
+                avgVol: md.total_volume?.usd ?? null, // Fallback to 24h vol
+                circSupply: md.circulating_supply ?? null,
+                totalSupply: md.total_supply ?? md.max_supply ?? null,
+                fdv: md.fully_diluted_valuation?.usd ?? null,
+                performance: {
+                    '1H': md.price_change_percentage_1h_in_currency?.usd ?? null,
+                    '24H': md.price_change_percentage_24h ?? null,
+                    '7D': md.price_change_percentage_7d ?? null,
+                    '30D': md.price_change_percentage_30d ?? null,
+                    '60D': md.price_change_percentage_60d ?? null,
+                    '200D': md.price_change_percentage_200d ?? null,
+                    '1Y': md.price_change_percentage_1y ?? null,
+                },
+                rank: data.market_cap_rank ?? '-',
+                category: data.categories && data.categories.length > 0 ? data.categories[0] : 'Crypto',
+                exchanges: '-', 
+                pairs: '-',
+                high24: md.high_24h?.usd ?? null,
+                low24: md.low_24h?.usd ?? null,
+                ath: md.ath?.usd ?? null,
+                atl: md.atl?.usd ?? null,
+                image: data.image?.small || null,
+                isPartial: false
+            };
+        } catch (error) {
+            console.warn(`Failed to fetch full data for ${symbol}. Trying Binance fallback... Error:`, error);
+            try {
+                let cleanSymbol = symbol.split('-')[0].replace(/USDT$/, '').replace(/USD$/, '').toUpperCase();
+                if (cleanSymbol.startsWith('1000')) cleanSymbol = cleanSymbol.replace(/^1000/, '');
+                if (cleanSymbol === 'MATIC') cleanSymbol = 'POL';
+                
+                const binanceRes = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${cleanSymbol}USDT`);
+                if (!binanceRes.ok) throw new Error('Binance failed');
+                const bData = await binanceRes.json();
+                
+                assetInfoCache[symbol] = {
+                    symbol: cleanSymbol,
+                    name: cleanSymbol,
+                    price: parseFloat(bData.lastPrice),
+                    change24: parseFloat(bData.priceChangePercent),
+                    marketCap: null,
+                    vol24: parseFloat(bData.quoteVolume),
+                    avgVol: null,
+                    circSupply: null,
+                    totalSupply: null,
+                    fdv: null,
+                    performance: {
+                        '1H': null,
+                        '24H': parseFloat(bData.priceChangePercent),
+                        '7D': null, '30D': null, '60D': null, '200D': null, '1Y': null,
+                    },
+                    rank: '-', category: 'Crypto', exchanges: '-', pairs: '-',
+                    high24: parseFloat(bData.highPrice),
+                    low24: parseFloat(bData.lowPrice),
+                    ath: null, atl: null, image: null,
+                    isPartial: true
+                };
+            } catch (bError) {
+                console.warn(`Binance fallback failed. Using empty fallback.`, bError);
+                assetInfoCache[symbol] = getEmptyAssetInfo(symbol);
+            }
+        }
+    }
+
+    const info = assetInfoCache[symbol];
+    renderAssetInfo(info);
+
+    loadingContainer.style.display = 'none';
+    dataContainer.style.display = 'block';
+}
+
+function getEmptyAssetInfo(symbol) {
+    return {
+        symbol: symbol,
+        name: symbol,
+        price: null,
+        change24: null,
+        marketCap: null,
+        vol24: null,
+        avgVol: null,
+        circSupply: null,
+        totalSupply: null,
+        fdv: null,
+        performance: {
+            '1H': null,
+            '24H': null,
+            '7D': null,
+            '30D': null,
+            '60D': null,
+            '200D': null,
+            '1Y': null,
+        },
+        rank: '-',
+        category: '-',
+        exchanges: '-',
+        pairs: '-',
+        high24: null,
+        low24: null,
+        ath: null,
+        atl: null,
+        image: null,
+        isPartial: true
+    };
+}
+
+function formatCurrency(num) {
+    if (typeof num !== 'number' || isNaN(num)) return '-';
+    if (num >= 1e9) return '$' + (num / 1e9).toFixed(2) + 'B';
+    if (num >= 1e6) return '$' + (num / 1e6).toFixed(2) + 'M';
+    if (num >= 1e3) return '$' + (num / 1e3).toFixed(2) + 'K';
+    return '$' + num.toFixed(2);
+}
+
+function formatNumber(num) {
+    if (typeof num !== 'number' || isNaN(num)) return '-';
+    if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
+    if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
+    if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
+    return num.toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+
+function formatPercent(num) {
+    if (typeof num !== 'number' || isNaN(num)) return '-';
+    const sign = num > 0 ? '+' : '';
+    return sign + num.toFixed(2) + '%';
+}
+
+function getPerfClass(num) {
+    if (typeof num !== 'number' || isNaN(num)) return '';
+    return num >= 0 ? 'perf-up' : 'perf-down';
+}
+
+function renderAssetInfo(info) {
+    const container = document.getElementById('info-panel-data');
+    if (!container) return;
+
+    const logoColor = `hsl(${Math.abs(info.symbol.charCodeAt(0) * 30 % 360)}, 70%, 50%)`;
+
+    container.innerHTML = `
+        <div class="info-header" style="justify-content: space-between; width: 100%;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+                ${info.image ? `<img src="${info.image}" class="info-logo" style="background-color: transparent;">` : `<div class="info-logo" style="background-color: ${logoColor}">${info.symbol.charAt(0)}</div>`}
+                <div class="info-title">
+                    <h2>${info.name}</h2>
+                    <span class="info-symbol">${info.symbol}</span>
+                </div>
+            </div>
+            <button onclick="fetchAndRenderAssetInfo('${info.symbol}', true)" class="settings-btn" title="Refresh Data" style="font-size: 14px; padding: 6px; margin: 0;">🔄</button>
+        </div>
+        <div class="info-price-section">
+            <div class="info-price" id="info-panel-price">${formatCurrency(info.price)}</div>
+            <div class="info-change ${getPerfClass(info.change24)}">${formatPercent(info.change24)}</div>
+        </div>
+
+        <div class="info-section">
+            <h3>Market Statistics</h3>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">Market Cap</span>
+                    <span class="info-value">${formatCurrency(info.marketCap)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">24h Volume</span>
+                    <span class="info-value">${formatCurrency(info.vol24)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Avg Volume</span>
+                    <span class="info-value">${formatCurrency(info.avgVol)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Circulating Supply</span>
+                    <span class="info-value">${formatNumber(info.circSupply)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Total Supply</span>
+                    <span class="info-value">${formatNumber(info.totalSupply)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Fully Diluted Val</span>
+                    <span class="info-value">${formatCurrency(info.fdv)}</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="info-section">
+            <h3>Performance</h3>
+            <div class="perf-grid">
+                ${Object.entries(info.performance).map(([period, val]) => `
+                    <div class="perf-card ${getPerfClass(val)}">
+                        <div class="perf-period">${period}</div>
+                        <div class="perf-val">${formatPercent(val)}</div>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+
+        <div class="info-section">
+            <h3>Market Information</h3>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">Rank</span>
+                    <span class="info-value">#${info.rank}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Category</span>
+                    <span class="info-value">${info.category}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Exchanges</span>
+                    <span class="info-value">${info.exchanges}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">Trading Pairs</span>
+                    <span class="info-value">${info.pairs}</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="info-section">
+            <h3>Quick Metrics</h3>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="info-label">24h High</span>
+                    <span class="info-value">${formatCurrency(info.high24)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">24h Low</span>
+                    <span class="info-value">${formatCurrency(info.low24)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">All Time High</span>
+                    <span class="info-value">${formatCurrency(info.ath)}</span>
+                </div>
+                <div class="info-item">
+                    <span class="info-label">All Time Low</span>
+                    <span class="info-value">${formatCurrency(info.atl)}</span>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function updateInfoPanelPrice(price) {
+    const priceEl = document.getElementById('info-panel-price');
+    if (priceEl && price !== null) {
+        priceEl.textContent = formatCurrency(price);
+    }
 }

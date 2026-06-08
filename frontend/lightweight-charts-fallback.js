@@ -163,7 +163,7 @@ if (!window.LightweightCharts) {
 
                 const plot = {
                     left: 10,
-                    right: 48,
+                    right: 68,
                     top: 12,
                     bottom: 24,
                 };
@@ -246,7 +246,7 @@ if (!window.LightweightCharts) {
                     const currentY = scaleY(currentPrice);
                     const color = this.options.priceLineColor || (currentPrice >= lastCandle.open ? "#16a34a" : "#dc2626");
 
-                    const priceLine = line(plot.left, currentY, this.chart.width - plot.right, currentY, color, 1);
+                    const priceLine = line(plot.left, currentY, this.chart.width, currentY, color, 1);
                     priceLine.setAttribute("stroke-dasharray", "2,2");
                     this.chart.axisGroup.appendChild(priceLine);
                 }
@@ -368,7 +368,7 @@ if (!window.LightweightCharts) {
                         const plLine = document.createElementNS(SVG_NS, "line");
                         plLine.setAttribute("x1", plot.left);
                         plLine.setAttribute("y1", y);
-                        plLine.setAttribute("x2", this.chart.width - plot.right);
+                        plLine.setAttribute("x2", this.chart.width);
                         plLine.setAttribute("y2", y);
                         plLine.setAttribute("stroke", pl.options.color || "#ffffff");
                         plLine.setAttribute("stroke-width", pl.options.lineWidth || 1);
