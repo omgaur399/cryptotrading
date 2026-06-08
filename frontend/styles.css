@@ -262,7 +262,7 @@ select {
     width: 100%;
 }
 
-/* Force charting elements to strictly respect container bounds to prevent stretching loops and bottom clipping */
+/* Force charting elements to strictly respect container bounds */
 .chart-container > div:not(.chart-message):not(.countdown-timer),
 .chart-container > svg {
     position: absolute !important;

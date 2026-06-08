@@ -1,6 +1,8 @@
 const CONFIG = {
     API_BASE: "/api",
     STORAGE_KEY: "trading-dashboard-chart-count",
+    LAYOUT_STORAGE_KEY: "trading-dashboard-layout",
+    THEME_STORAGE_KEY: "trading-dashboard-theme",
     DEFAULT_CHART_COUNT: 4,
     ALLOWED_COUNTS: [1, 2, 4, 6, 8],
 };
@@ -53,16 +55,32 @@ const state = {
     charts: {},
     liveStream: null,
     connected: false,
+    theme: "dark",
 };
 
 document.addEventListener("DOMContentLoaded", initializeApp);
 
 async function initializeApp() {
+    state.theme = localStorage.getItem(CONFIG.THEME_STORAGE_KEY) || "dark";
+    if (state.theme === "light") document.body.classList.add("light-theme");
+    injectThemeStyles();
+
     state.chartCount = readSavedChartCount();
     document.getElementById("chart-count").value = String(state.chartCount);
     document.getElementById("chart-count").addEventListener("change", event => {
         setChartCount(Number(event.target.value));
     });
+
+    const chartCountEl = document.getElementById("chart-count");
+    if (chartCountEl && chartCountEl.parentNode) {
+        const themeBtn = document.createElement("button");
+        themeBtn.id = "theme-toggle";
+        themeBtn.className = "theme-btn";
+        themeBtn.textContent = state.theme === "dark" ? "☀️ Light Mode" : "🌙 Dark Mode";
+        themeBtn.style.marginLeft = "12px";
+        themeBtn.onclick = toggleTheme;
+        chartCountEl.parentNode.appendChild(themeBtn);
+    }
 
     connectLiveStream();
     await loadInstruments();
@@ -71,11 +89,43 @@ async function initializeApp() {
     updateTimestamp();
     setInterval(updateCountdowns, 1000);
     setInterval(updateTimestamp, 1000);
+
+    document.addEventListener("visibilitychange", () => {
+        if (!document.hidden) {
+            Object.values(state.charts).forEach(chartData => {
+                if (chartData.lastPrice !== null) {
+                    updateTicker(chartData, chartData.lastPrice, chartData.referencePrice);
+                }
+            });
+            updateCountdowns();
+        }
+    });
 }
 
 function readSavedChartCount() {
     const saved = Number(localStorage.getItem(CONFIG.STORAGE_KEY));
     return CONFIG.ALLOWED_COUNTS.includes(saved) ? saved : CONFIG.DEFAULT_CHART_COUNT;
+}
+
+function getSavedLayoutState() {
+    try {
+        const saved = localStorage.getItem(CONFIG.LAYOUT_STORAGE_KEY);
+        return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+function saveLayoutState() {
+    const layout = {};
+    Object.values(state.charts).forEach(chartData => {
+        layout[chartData.id] = {
+            symbol: chartData.symbol,
+            interval: chartData.interval,
+            indicators: chartData.indicators
+        };
+    });
+    localStorage.setItem(CONFIG.LAYOUT_STORAGE_KEY, JSON.stringify(layout));
 }
 
 async function loadInstruments() {
@@ -147,6 +197,8 @@ function renderGrid() {
     });
     state.charts = {};
 
+    const savedLayout = getSavedLayoutState();
+
     for (let index = 1; index <= state.chartCount; index += 1) {
         const chartId = `chart-${index}`;
         
@@ -160,20 +212,26 @@ function renderGrid() {
             { symbol: "none", interval: "1d" },
             { symbol: "none", interval: "1d" }
         ];
-        const config = defaultConfigs[(index - 1) % 8];
+        const defaultConfig = defaultConfigs[(index - 1) % 8];
+        const savedConfig = savedLayout[chartId] || {};
         
         let instrumentId = "none";
         let source = "none";
         let symbol = "No Chart";
         let interval = "1d";
+        let targetSymbol = savedConfig.symbol || defaultConfig.symbol;
+        let targetInterval = savedConfig.interval || defaultConfig.interval;
+        let targetIndicators = savedConfig.indicators || {
+            volume: true, sma: false, ema: false, smaPeriod: 20, emaPeriod: 20
+        };
         
-        if (config.symbol !== "none") {
-            const instrument = state.instruments.find(i => i.symbol === config.symbol) || state.instruments[0];
+        if (targetSymbol !== "none" && targetSymbol !== "No Chart") {
+            const instrument = state.instruments.find(i => i.symbol === targetSymbol) || state.instruments.find(i => i.symbol === defaultConfig.symbol) || state.instruments[0];
             if (instrument) {
                 instrumentId = instrument.id;
                 source = instrument.source;
                 symbol = instrument.symbol;
-                interval = instrument.timeframes.includes(config.interval) ? config.interval : instrument.timeframes[0];
+                interval = instrument.timeframes.includes(targetInterval) ? targetInterval : instrument.timeframes[0];
             }
         }
 
@@ -185,11 +243,16 @@ function renderGrid() {
             interval: interval,
             chart: null,
             candleSeries: null,
+            volumeSeries: null,
+            smaSeries: null,
+            emaSeries: null,
+            cachedData: [],
             currentCandle: null,
             lastPrice: null,
             referencePrice: null,
             liveSubscribed: false,
             lastDirection: 'up',
+            indicators: targetIndicators,
         };
 
         state.charts[chartId] = chartData;
@@ -204,6 +267,11 @@ function createChartPane(chartData, index) {
     const pane = document.createElement("section");
     pane.className = "chart-pane";
     pane.id = chartData.id;
+
+    const volText = chartData.indicators.volume ? "On" : "Off";
+    const smaText = chartData.indicators.sma ? "On" : "Off";
+    const emaText = chartData.indicators.ema ? "On" : "Off";
+
     pane.innerHTML = `
         <div class="pane-header" id="${chartData.id}-ticker">
             <div class="pane-ticker">
@@ -217,6 +285,12 @@ function createChartPane(chartData, index) {
                     <div class="custom-select-dropdown"></div>
                 </div>
                 <select class="pane-select interval-select" aria-label="Timeframe"></select>
+                <select class="pane-select indicator-select" aria-label="Indicators">
+                    <option value="" disabled selected>Indicators</option>
+                    <option value="volume">Volume (${volText})</option>
+                    <option value="sma">SMA ${chartData.indicators.smaPeriod} (${smaText})</option>
+                    <option value="ema">EMA ${chartData.indicators.emaPeriod} (${emaText})</option>
+                </select>
             </div>
         </div>
         <div class="chart-container" id="${chartData.id}-container">
@@ -232,6 +306,7 @@ function populatePaneControls(chartData) {
     const input = pane.querySelector(".symbol-select-input");
     const dropdown = pane.querySelector(".custom-select-dropdown");
     const intervalSelect = pane.querySelector(".interval-select");
+    const indicatorSelect = pane.querySelector(".indicator-select");
 
     input.value = chartData.symbol;
 
@@ -279,6 +354,7 @@ function populatePaneControls(chartData) {
                     chartData.source = "none";
                     chartData.symbol = "No Chart";
                     resetChart(chartData);
+                    saveLayoutState();
                 }
             } else {
                 const instrument = state.instruments.find(item => item.id === selectedId);
@@ -294,6 +370,7 @@ function populatePaneControls(chartData) {
                     updateIntervalOptions(chartData, intervalSelect);
                     resetChart(chartData);
                     loadChartData(chartData);
+                    saveLayoutState();
                 }
             }
             input.value = chartData.symbol;
@@ -308,6 +385,58 @@ function populatePaneControls(chartData) {
         chartData.interval = intervalSelect.value;
         resetChart(chartData);
         loadChartData(chartData);
+        saveLayoutState();
+    });
+
+    indicatorSelect.addEventListener("change", (e) => {
+        const indicator = e.target.value;
+        if (indicator === "volume") {
+            chartData.indicators.volume = !chartData.indicators.volume;
+            if (chartData.volumeSeries) {
+                chartData.volumeSeries.applyOptions({ visible: chartData.indicators.volume });
+            }
+            e.target.options[1].text = `Volume (${chartData.indicators.volume ? 'On' : 'Off'})`;
+        } else if (indicator === "sma") {
+            if (!chartData.indicators.sma) {
+                const input = prompt("Enter period for SMA:", chartData.indicators.smaPeriod);
+                const period = parseInt(input, 10);
+                if (input !== null && !isNaN(period) && period > 0) {
+                    chartData.indicators.smaPeriod = period;
+                    chartData.indicators.sma = true;
+                    if (chartData.smaSeries) {
+                        chartData.smaSeries.setData(calculateSMA(chartData.cachedData, period));
+                        chartData.smaSeries.applyOptions({ visible: true });
+                    }
+                }
+            } else {
+                chartData.indicators.sma = false;
+                if (chartData.smaSeries) {
+                    chartData.smaSeries.applyOptions({ visible: false });
+                }
+            }
+            e.target.options[2].text = `SMA ${chartData.indicators.smaPeriod} (${chartData.indicators.sma ? 'On' : 'Off'})`;
+        } else if (indicator === "ema") {
+            if (!chartData.indicators.ema) {
+                const input = prompt("Enter period for EMA:", chartData.indicators.emaPeriod);
+                const period = parseInt(input, 10);
+                if (input !== null && !isNaN(period) && period > 0) {
+                    chartData.indicators.emaPeriod = period;
+                    chartData.indicators.ema = true;
+                    if (chartData.emaSeries) {
+                        chartData.emaSeries.setData(calculateEMA(chartData.cachedData, period));
+                        chartData.emaSeries.applyOptions({ visible: true });
+                    }
+                }
+            } else {
+                chartData.indicators.ema = false;
+                if (chartData.emaSeries) {
+                    chartData.emaSeries.applyOptions({ visible: false });
+                }
+            }
+            e.target.options[3].text = `EMA ${chartData.indicators.emaPeriod} (${chartData.indicators.ema ? 'On' : 'Off'})`;
+        }
+        e.target.value = ""; // Reset the dropdown back to the "Indicators" placeholder
+        saveLayoutState();
     });
 }
 
@@ -320,61 +449,72 @@ function updateIntervalOptions(chartData, intervalSelect) {
 
 function initializeChart(chartData) {
     const container = document.getElementById(`${chartData.id}-container`);
+    const isLight = state.theme === "light";
+    const themeOptions = getChartThemeOptions(isLight);
 
     chartData.chart = LightweightCharts.createChart(container, {
         autoSize: true,
-        layout: {
-            background: { color: "#11161d" },
-            textColor: "#d8dee8",
-            fontFamily: "Inter, system-ui, -apple-system, sans-serif",
-            fontSize: 10,
-        },
+        layout: themeOptions.layout,
         localization: {
             timeFormatter: TimeUtils.formatTooltip,
         },
-        grid: {
-            vertLines: { color: "#26313d" },
-            horzLines: { color: "#26313d" },
-        },
+        grid: themeOptions.grid,
         timeScale: {
             timeVisible: true,
             secondsVisible: false,
-            borderColor: "#394654",
+            borderColor: themeOptions.timeScale.borderColor,
             tickMarkFormatter: TimeUtils.formatAxis,
             rightOffset: 25,
             barSpacing: 8,
             shiftVisibleRangeOnNewBar: true,
         },
         rightPriceScale: {
-            borderColor: "#394654",
+            borderColor: themeOptions.rightPriceScale.borderColor,
             ticksVisible: false,
             entireTextOnly: false,
-        },
-        crosshair: {
-            horzLine: {
-                color: "#8b9bb0",
-                style: 2, // LightweightCharts Dashed Style
-                labelBackgroundColor: "#151b23",
+            scaleMargins: {
+                top: 0.1,
+                bottom: 0.25, // Leave 25% empty at the bottom for volume bars
             },
-            vertLine: {
-                color: "#8b9bb0",
-                style: 2, // LightweightCharts Dashed Style
-                labelBackgroundColor: "#151b23",
-            }
         },
+        crosshair: themeOptions.crosshair,
     });
 
     chartData.candleSeries = chartData.chart.addCandlestickSeries({
-        upColor: "#16a34a",
-        downColor: "#dc2626",
-        wickUpColor: "#16a34a",
-        wickDownColor: "#dc2626",
-        borderVisible: false,
-        priceLineVisible: true,
-        priceLineColor: "#16a34a", 
-        priceLineWidth: 1,
-        priceLineStyle: 1, // 1 = Dotted Line
-        lastValueVisible: false, // Disable default label; we'll draw our own.
+            upColor: "#16a34a", downColor: "#dc2626",
+            wickUpColor: "#16a34a", wickDownColor: "#dc2626",
+            borderVisible: false, priceLineVisible: true,
+            priceLineColor: "#16a34a", priceLineWidth: 1, priceLineStyle: 1,
+            lastValueVisible: false,
+        });
+
+    chartData.volumeSeries = chartData.chart.addHistogramSeries({
+        color: '#26a69a',
+        priceFormat: { type: 'volume' },
+        priceScaleId: '', // Place it on a separate, hidden scale
+        visible: chartData.indicators.volume,
+    });
+    chartData.volumeSeries.priceScale().applyOptions({
+        scaleMargins: {
+            top: 0.8, // Push volume down to the bottom 20%
+            bottom: 0,
+        },
+    });
+
+    chartData.smaSeries = chartData.chart.addLineSeries({
+        color: '#f59e0b',
+        lineWidth: 1,
+        visible: chartData.indicators.sma,
+        lastValueVisible: false,
+        priceLineVisible: false,
+    });
+    
+    chartData.emaSeries = chartData.chart.addLineSeries({
+        color: '#3b82f6',
+        lineWidth: 1,
+        visible: chartData.indicators.ema,
+        lastValueVisible: false,
+        priceLineVisible: false,
     });
 }
 
@@ -383,7 +523,11 @@ function resetChart(chartData) {
     chartData.lastPrice = null;
     chartData.referencePrice = null;
     chartData.liveSubscribed = false;
+    chartData.cachedData = [];
     if (chartData.candleSeries) chartData.candleSeries.setData([]);
+    if (chartData.volumeSeries) chartData.volumeSeries.setData([]);
+    if (chartData.smaSeries) chartData.smaSeries.setData([]);
+    if (chartData.emaSeries) chartData.emaSeries.setData([]);
     setPaneMessage(chartData.id, chartData.instrumentId === "none" ? "No Chart Selected" : "Loading");
     updateTicker(chartData, null, null);
 }
@@ -402,19 +546,28 @@ async function loadChartData(chartData) {
         }
 
         const candles = payload.candles.map(normalizeCandle).filter(Boolean);
-        chartData.candleSeries.setData(candles);
+        chartData.cachedData = candles;
 
-        // Forcefully re-apply the right gap because setData() overwrites it by default
-        chartData.chart.timeScale().applyOptions({
-            rightOffset: 25,
-            barSpacing: 8,
-        });
+        chartData.candleSeries.setData(candles);
+        chartData.volumeSeries.setData(candles.map(c => ({
+            time: c.time,
+            value: c.volume,
+            color: c.close >= c.open ? 'rgba(22, 163, 74, 0.4)' : 'rgba(220, 38, 38, 0.4)'
+        })));
+
+        if (chartData.indicators.sma) {
+            chartData.smaSeries.setData(calculateSMA(candles, chartData.indicators.smaPeriod));
+        }
+        if (chartData.indicators.ema) {
+            chartData.emaSeries.setData(calculateEMA(candles, chartData.indicators.emaPeriod));
+        }
+
+        chartData.chart.timeScale().applyOptions({ rightOffset: 25, barSpacing: 8 });
         chartData.chart.timeScale().scrollToRealTime();
 
         chartData.currentCandle = candles[candles.length - 1];
         chartData.referencePrice = candles.length > 1 ? candles[candles.length - 2].close : chartData.currentCandle.open;
         
-        // Set initial dynamic price line color
         const isUp = chartData.currentCandle.close >= chartData.currentCandle.open;
         chartData.lastDirection = isUp ? 'up' : 'down';
         chartData.candleSeries.applyOptions({
@@ -425,7 +578,7 @@ async function loadChartData(chartData) {
         clearPaneMessage(chartData.id);
         subscribeChart(chartData);
         setDataStatus(`Loaded ${chartData.symbol} ${chartData.interval}`);
-        updateCountdowns(); // Show timer instantly after load
+        updateChartCountdown(chartData); // Show timer instantly after load
     } catch (error) {
         setPaneMessage(chartData.id, error.message);
         setDataStatus(error.message);
@@ -439,6 +592,7 @@ function normalizeCandle(candle) {
         high: Number(candle.high),
         low: Number(candle.low),
         close: Number(candle.close),
+        volume: Number(candle.volume || 0),
     };
     return Object.values(normalized).every(Number.isFinite) ? normalized : null;
 }
@@ -475,19 +629,48 @@ function applyPriceUpdate(chartData, tick) {
     if (!Number.isFinite(price) || !Number.isFinite(time)) return;
 
     const candle = buildRealtimeCandle(chartData, time, price);
-    chartData.candleSeries.update(candle);
+    
+    // Cache maintenance
+    if (chartData.cachedData.length > 0) {
+        const last = chartData.cachedData[chartData.cachedData.length - 1];
+        if (last.time === candle.time) chartData.cachedData[chartData.cachedData.length - 1] = candle;
+        else chartData.cachedData.push(candle);
+    }
 
-    // Dynamically update the dotted line and box color based on tick direction
+    chartData.candleSeries.update(candle);
+    
+    if (chartData.indicators.volume) {
+        chartData.volumeSeries.update({
+            time: candle.time,
+            value: candle.volume,
+            color: candle.close >= candle.open ? 'rgba(22, 163, 74, 0.4)' : 'rgba(220, 38, 38, 0.4)'
+        });
+    }
+
+    if (chartData.indicators.sma) {
+        const lastSma = calculateLatestSMA(chartData.cachedData, chartData.indicators.smaPeriod);
+        if (lastSma) chartData.smaSeries.update(lastSma);
+    }
+
+    if (chartData.indicators.ema) {
+        const lastEma = calculateLatestEMA(chartData.cachedData, chartData.indicators.emaPeriod);
+        if (lastEma) chartData.emaSeries.update(lastEma);
+    }
+
     const isUp = candle.close >= candle.open;
     chartData.lastDirection = isUp ? 'up' : 'down';
     chartData.candleSeries.applyOptions({
         priceLineColor: isUp ? "#16a34a" : "#dc2626"
     });
 
-    updateTicker(chartData, price, chartData.referencePrice);
-    flashTicker(chartData.id, chartData.lastPrice === null || price >= chartData.lastPrice ? "up" : "down");
+    const direction = chartData.lastPrice === null || price >= chartData.lastPrice ? "up" : "down";
     chartData.lastPrice = price;
-    updateCountdowns(); // Show timer instantly after tick
+
+    if (!document.hidden) {
+        updateTicker(chartData, price, chartData.referencePrice);
+        flashTicker(chartData.id, direction);
+        updateChartCountdown(chartData); // Only update this specific chart's timer!
+    }
 }
 
 function buildRealtimeCandle(chartData, time, price) {
@@ -503,6 +686,7 @@ function buildRealtimeCandle(chartData, time, price) {
             high: price,
             low: price,
             close: price,
+            volume: 0,
         };
         return chartData.currentCandle;
     }
@@ -510,6 +694,7 @@ function buildRealtimeCandle(chartData, time, price) {
     current.high = Math.max(current.high, price);
     current.low = Math.min(current.low, price);
     current.close = price;
+    current.volume += 1; // Tick increment fallback
     return current;
 }
 
@@ -548,6 +733,7 @@ function updateTicker(chartData, price, reference) {
 }
 
 function flashTicker(chartId, direction) {
+    if (document.hidden) return; // Prevent layout thrashing when tab is hidden
     const ticker = document.getElementById(`${chartId}-ticker`);
     ticker.classList.remove("flash-up", "flash-down");
     void ticker.offsetWidth;
@@ -577,50 +763,53 @@ function clearPaneMessage(chartId) {
 }
 
 function updateCountdowns() {
+    if (document.hidden) return; // Skip updating visually when inactive
     const now = Date.now();
     Object.values(state.charts).forEach(chartData => {
-        let timerEl = document.getElementById(`${chartData.id}-timer`);
-        
-        // Recreate the timer dynamically if the charting engine wiped the container HTML
-        if (!timerEl) {
-            const container = document.getElementById(`${chartData.id}-container`);
-            if (!container) return;
-            timerEl = document.createElement("div");
-            timerEl.id = `${chartData.id}-timer`;
-            timerEl.className = "countdown-timer";
-            container.appendChild(timerEl);
-        }
-
-        if (!chartData.candleSeries || chartData.lastPrice === null) {
-            timerEl.classList.remove("show");
-            return;
-        }
-
-        const remaining = getCountdownMs(chartData.interval, now);
-        if (remaining === null) {
-            timerEl.classList.remove("show");
-            return;
-        }
-
-        // Get the exact Y coordinate of the live price on the canvas
-        const y = chartData.candleSeries.priceToCoordinate(chartData.lastPrice);
-        if (y === null || y < 0) {
-            timerEl.classList.remove("show");
-            return;
-        }
-
-        const timerHeight = 32; // Double height for price and timer
-        timerEl.style.top = `${y - (timerHeight / 2)}px`;
-        
-        const priceStr = formatPrice(chartData.lastPrice);
-        const timerStr = formatCountdown(remaining);
-        
-        timerEl.innerHTML = `<span>${priceStr}</span><span class="timer-val">${timerStr}</span>`;
-
-        timerEl.classList.remove('up', 'down');
-        timerEl.classList.add(chartData.lastDirection);
-        timerEl.classList.add("show");
+        updateChartCountdown(chartData, now);
     });
+}
+
+function updateChartCountdown(chartData, now = Date.now()) {
+    let timerEl = document.getElementById(`${chartData.id}-timer`);
+    
+    if (!timerEl) {
+        const container = document.getElementById(`${chartData.id}-container`);
+        if (!container) return;
+        timerEl = document.createElement("div");
+        timerEl.id = `${chartData.id}-timer`;
+        timerEl.className = "countdown-timer";
+        container.appendChild(timerEl);
+    }
+
+    if (!chartData.candleSeries || chartData.lastPrice === null) {
+        timerEl.classList.remove("show");
+        return;
+    }
+
+    const remaining = getCountdownMs(chartData.interval, now);
+    if (remaining === null) {
+        timerEl.classList.remove("show");
+        return;
+    }
+
+    const y = chartData.candleSeries.priceToCoordinate(chartData.lastPrice);
+    if (y === null || y < 0) {
+        timerEl.classList.remove("show");
+        return;
+    }
+
+    const timerHeight = 32; 
+    timerEl.style.top = `${y - (timerHeight / 2)}px`;
+    
+    const priceStr = formatPrice(chartData.lastPrice);
+    const timerStr = formatCountdown(remaining);
+    
+    timerEl.innerHTML = `<span>${priceStr}</span><span class="timer-val">${timerStr}</span>`;
+
+    timerEl.classList.remove('up', 'down');
+    timerEl.classList.add(chartData.lastDirection);
+    timerEl.classList.add("show");
 }
 
 function getCountdownMs(interval, now) {
@@ -657,4 +846,154 @@ function setDataStatus(message) {
 
 function updateTimestamp() {
     document.getElementById("timestamp").textContent = TimeUtils.getCurrentTime();
+}
+
+function calculateSMA(data, period) {
+    const sma = [];
+    for (let i = period - 1; i < data.length; i++) {
+        let sum = 0;
+        for (let j = 0; j < period; j++) {
+            sum += data[i - j].close;
+        }
+        sma.push({ time: data[i].time, value: sum / period });
+    }
+    return sma;
+}
+
+function calculateLatestSMA(data, period) {
+    if (data.length < period) return null;
+    let sum = 0;
+    for (let i = 0; i < period; i++) {
+        sum += data[data.length - 1 - i].close;
+    }
+    return { time: data[data.length - 1].time, value: sum / period };
+}
+
+function calculateLatestEMA(data, period) {
+    if (data.length < period) return null;
+    
+    const multiplier = 2 / (period + 1);
+    let ema = 0;
+    for (let i = 0; i < period; i++) ema += data[i].close;
+    ema /= period;
+
+    for (let i = period; i < data.length; i++) {
+        ema = (data[i].close - ema) * multiplier + ema;
+    }
+    return { time: data[data.length - 1].time, value: ema };
+}
+
+function calculateEMA(data, period) {
+    const ema = [];
+    if (data.length < period) return ema;
+    
+    const multiplier = 2 / (period + 1);
+    let sum = 0;
+    for (let i = 0; i < period; i++) sum += data[i].close;
+    let prevEMA = sum / period;
+    ema.push({ time: data[period - 1].time, value: prevEMA });
+
+    for (let i = period; i < data.length; i++) {
+        const currentEMA = (data[i].close - prevEMA) * multiplier + prevEMA;
+        ema.push({ time: data[i].time, value: currentEMA });
+        prevEMA = currentEMA;
+    }
+    return ema;
+}
+
+function injectThemeStyles() {
+    const style = document.createElement('style');
+    style.id = "theme-styles";
+    style.textContent = `
+        body.light-theme {
+            --primary-bg: #f8fafc;
+            --secondary-bg: #ffffff;
+            --text-primary: #0f172a;
+            --border-color: #cbd5e1;
+            background-color: var(--primary-bg);
+            color: var(--text-primary);
+        }
+        body.light-theme .chart-pane {
+            background-color: var(--secondary-bg);
+            border-color: var(--border-color);
+        }
+        body.light-theme .pane-header {
+            border-bottom-color: var(--border-color);
+        }
+        body.light-theme .symbol-select-input, 
+        body.light-theme .pane-select {
+            background-color: #f1f5f9;
+            color: #0f172a;
+            border-color: #cbd5e1;
+        }
+        body.light-theme .custom-select-dropdown {
+            background-color: #ffffff;
+            border-color: #cbd5e1;
+        }
+        body.light-theme .custom-select-option:hover {
+            background-color: #f1f5f9;
+        }
+        body.light-theme .chart-message,
+        body.light-theme .ticker-symbol {
+            color: var(--text-primary);
+        }
+        body.light-theme .countdown-timer {
+            background-color: rgba(255, 255, 255, 0.9);
+            border-color: #cbd5e1;
+            color: #0f172a;
+        }
+        .theme-btn {
+            background-color: #2a3f5f;
+            color: #ffffff;
+            border: 1px solid #394654;
+            padding: 4px 10px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: inherit;
+        }
+        .theme-btn:hover { background-color: #394654; }
+        body.light-theme .theme-btn {
+            background-color: #e2e8f0;
+            color: #0f172a;
+            border-color: #cbd5e1;
+        }
+        body.light-theme .theme-btn:hover { background-color: #cbd5e1; }
+    `;
+    document.head.appendChild(style);
+}
+
+function toggleTheme() {
+    state.theme = state.theme === "dark" ? "light" : "dark";
+    localStorage.setItem(CONFIG.THEME_STORAGE_KEY, state.theme);
+    
+    const isLight = state.theme === "light";
+    document.body.classList.toggle("light-theme", isLight);
+    
+    const btn = document.getElementById("theme-toggle");
+    if (btn) btn.textContent = isLight ? "🌙 Dark Mode" : "☀️ Light Mode";
+    
+    const themeOptions = getChartThemeOptions(isLight);
+    Object.values(state.charts).forEach(chartData => {
+        if (chartData.chart) chartData.chart.applyOptions(themeOptions);
+    });
+}
+
+function getChartThemeOptions(isLight) {
+    return {
+        layout: {
+            background: { color: isLight ? "#ffffff" : "#11161d" },
+            textColor: isLight ? "#1e293b" : "#d8dee8",
+        },
+        grid: {
+            vertLines: { color: isLight ? "#f1f5f9" : "#26313d" },
+            horzLines: { color: isLight ? "#f1f5f9" : "#26313d" },
+        },
+        timeScale: { borderColor: isLight ? "#cbd5e1" : "#394654" },
+        rightPriceScale: { borderColor: isLight ? "#cbd5e1" : "#394654" },
+        crosshair: {
+            horzLine: { color: isLight ? "#64748b" : "#8b9bb0", style: 2, labelBackgroundColor: isLight ? "#334155" : "#151b23" },
+            vertLine: { color: isLight ? "#64748b" : "#8b9bb0", style: 2, labelBackgroundColor: isLight ? "#334155" : "#151b23" }
+        }
+    };
 }
