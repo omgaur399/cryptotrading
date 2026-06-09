@@ -93,8 +93,13 @@ async function initializeApp() {
     await loadInstruments();
     renderGrid();
     updateTimestamp();
+    
+    createMarketTicker();
+    fetchMarketMovers();
+    
     setInterval(updateCountdowns, 1000);
     setInterval(updateTimestamp, 1000);
+    setInterval(fetchMarketMovers, 5000);
 
     document.addEventListener("visibilitychange", () => {
         if (!document.hidden) {
@@ -104,6 +109,7 @@ async function initializeApp() {
                 }
             });
             updateCountdowns();
+            fetchMarketMovers();
         }
     });
 }
@@ -179,8 +185,8 @@ function connectLiveStream() {
     // Legacy Backend SSE for Yahoo Finance
     if (window.EventSource && !state.liveStream) {
         state.liveStream = new EventSource(`${CONFIG.API_BASE}/live`);
-        state.liveStream.onopen = () => updateConnectionStatus(true);
-        state.liveStream.onerror = () => updateConnectionStatus(false);
+        state.liveStream.onopen = () => updateConnectionStatus();
+        state.liveStream.onerror = () => updateConnectionStatus();
         state.liveStream.onmessage = event => {
             if (!event.data) return;
             handlePriceUpdate(JSON.parse(event.data));
@@ -191,7 +197,7 @@ function connectLiveStream() {
     if (!state.hlWs) {
         state.hlWs = new WebSocket('wss://api.hyperliquid.xyz/ws');
         state.hlWs.onopen = () => {
-            updateConnectionStatus(true);
+            updateConnectionStatus();
             Object.values(state.charts).forEach(chartData => {
                 if (chartData.source === 'hyperliquid' && chartData.symbol !== 'none') {
                     subscribeChart(chartData);
@@ -200,6 +206,7 @@ function connectLiveStream() {
         };
         state.hlWs.onclose = () => {
             state.hlWs = null;
+            updateConnectionStatus();
             setTimeout(connectLiveStream, 5000); // Reconnect loop
         };
         state.hlWs.onmessage = event => {
@@ -1082,12 +1089,23 @@ function formatCountdown(ms) {
     return h > 0 ? `${h.toString().padStart(2, "0")}:${minSec}` : minSec;
 }
 
-function updateConnectionStatus(isConnected) {
+function updateConnectionStatus() {
+    const isSSEConnected = state.liveStream && state.liveStream.readyState === 1; // 1 is OPEN
+    const isWSConnected = state.hlWs && state.hlWs.readyState === 1;
+    const isConnected = isSSEConnected || isWSConnected;
+
+    const wasConnected = state.connected;
     state.connected = isConnected;
+    
     const status = document.getElementById("connection-status");
-    status.textContent = isConnected ? "Live connected" : "Live disconnected";
-    status.className = `status-indicator ${isConnected ? "connected" : "disconnected"}`;
-    if (isConnected) Object.values(state.charts).forEach(subscribeChart);
+    if (status) {
+        status.textContent = isConnected ? "Live connected" : "Live disconnected";
+        status.className = `status-indicator ${isConnected ? "connected" : "disconnected"}`;
+    }
+    
+    if (isConnected && !wasConnected) {
+        Object.values(state.charts).forEach(subscribeChart);
+    }
 }
 
 function setDataStatus(message) {
@@ -1459,6 +1477,108 @@ function injectThemeStyles() {
             border-color: #cbd5e1;
         }
         body.light-theme .theme-btn:hover { background-color: #cbd5e1; }
+        
+        /* Lock body to screen and prevent scrolling completely */
+        html, body {
+            overflow: hidden !important;
+        }
+
+        /* Ensure grid fits on screen with the new ticker */
+        .charts-grid {
+            height: calc(100vh - 140px) !important; 
+            min-height: 0 !important;
+        }
+        /* Allow charts to shrink below their default min-height */
+        .chart-pane, .chart-container {
+            min-height: 0 !important;
+        }
+
+        /* Market Ticker Styles */
+        .market-ticker-container {
+            display: flex;
+            flex-direction: column;
+            background-color: #151b23;
+            border-bottom: 1px solid #394654;
+            font-family: inherit;
+            font-size: 12px;
+            overflow: hidden;
+            flex-shrink: 0;
+        }
+        .ticker-row {
+            display: flex;
+            align-items: center;
+            height: 26px;
+            border-bottom: 1px solid rgba(57, 70, 84, 0.3);
+        }
+        .ticker-row:last-child {
+            border-bottom: none;
+        }
+        .ticker-label {
+            padding: 0 16px;
+            font-weight: 700;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+            z-index: 10;
+            background-color: #151b23;
+            box-shadow: 10px 0 10px -5px #151b23;
+            display: flex;
+            align-items: center;
+            height: 100%;
+        }
+        .gainers-label { color: #10b981; }
+        .losers-label { color: #ef4444; }
+        .ticker-scroll-wrapper {
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+            display: flex;
+            align-items: center;
+            height: 100%;
+            mask-image: linear-gradient(to right, transparent, black 2%, black 98%, transparent);
+            -webkit-mask-image: linear-gradient(to right, transparent, black 2%, black 98%, transparent);
+        }
+        .ticker-scroll {
+            display: flex;
+            width: max-content;
+            animation: ticker-scroll 40s linear infinite;
+        }
+        .ticker-scroll:hover {
+            animation-play-state: paused;
+        }
+        .ticker-content {
+            display: flex;
+        }
+        .market-ticker-item {
+            display: inline-flex;
+            align-items: center;
+            margin-right: 32px;
+            gap: 6px;
+            cursor: default;
+        }
+        .market-ticker-symbol {
+            font-weight: 600;
+            color: #d8dee8;
+        }
+        .market-ticker-percent {
+            font-weight: 700;
+            font-size: 13px;
+        }
+        .market-ticker-percent.up { color: #10b981; }
+        .market-ticker-percent.down { color: #ef4444; }
+        @keyframes ticker-scroll {
+            0% { transform: translateX(0); }
+            100% { transform: translateX(-50%); }
+        }
+        body.light-theme .market-ticker-container,
+        body.light-theme .ticker-label {
+            background-color: #f8fafc;
+            box-shadow: 10px 0 10px -5px #f8fafc;
+        }
+        body.light-theme .market-ticker-container { border-color: #cbd5e1; }
+        body.light-theme .ticker-row { border-bottom: 1px solid rgba(203, 213, 225, 0.5); }
+        body.light-theme .market-ticker-symbol { color: #0f172a; }
+
         .settings-modal-overlay {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -1565,7 +1685,7 @@ function injectThemeStyles() {
             grid-template-columns: 78% calc(22% - 12px);
             gap: 12px;
             /* Lock grid height to screen view to prevent panel from stretching it */
-            height: calc(100vh - 100px);
+            height: calc(100vh - 140px) !important;
         }
         /* Force children to respect grid height so overflow scrolling kicks in */
         .charts-grid.layout-1.with-info-panel > * {
@@ -1787,6 +1907,117 @@ function clearInfoPanel() {
     }
 }
 
+// --- Market Ticker Functions ---
+
+function createMarketTicker() {
+    if (document.getElementById('market-ticker-container')) return;
+
+    const tickerContainer = document.createElement('div');
+    tickerContainer.id = 'market-ticker-container';
+    tickerContainer.className = 'market-ticker-container';
+    
+    tickerContainer.innerHTML = `
+        <div class="ticker-row gainers-row">
+            <div class="ticker-label gainers-label">▲ TOP GAINERS</div>
+            <div class="ticker-scroll-wrapper">
+                <div class="ticker-scroll" id="ticker-gainers"></div>
+            </div>
+        </div>
+        <div class="ticker-row losers-row">
+            <div class="ticker-label losers-label">▼ TOP LOSERS</div>
+            <div class="ticker-scroll-wrapper">
+                <div class="ticker-scroll" id="ticker-losers"></div>
+            </div>
+        </div>
+    `;
+
+    const grid = document.getElementById('charts-grid');
+    if (grid && grid.parentNode) {
+        grid.parentNode.insertBefore(tickerContainer, grid);
+    } else {
+        document.body.prepend(tickerContainer);
+    }
+}
+
+async function fetchMarketMovers() {
+    if (document.hidden) return; // Save resources when tab is inactive
+
+    try {
+        const res = await fetch("https://api.hyperliquid.xyz/info", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ type: "metaAndAssetCtxs" })
+        });
+        if (!res.ok) throw new Error("Market data fetch failed");
+        
+        const data = await res.json();
+        if (!Array.isArray(data) || data.length < 2) return;
+        
+        const meta = data[0];
+        const assetCtxs = data[1];
+        
+        if (!meta.universe || !Array.isArray(assetCtxs)) return;
+        
+        const changes = meta.universe.map((coin, index) => {
+            const ctx = assetCtxs[index];
+            if (!ctx) return null;
+            const prev = parseFloat(ctx.prevDayPx);
+            const mark = parseFloat(ctx.markPx);
+            let change = 0;
+            if (!isNaN(prev) && !isNaN(mark) && prev !== 0) {
+                change = ((mark - prev) / prev) * 100;
+            }
+            return {
+                symbol: coin.name,
+                price: mark,
+                change: change
+            };
+        }).filter(item => item !== null && !isNaN(item.change));
+        
+        changes.sort((a, b) => b.change - a.change);
+        
+        const topGainers = changes.slice(0, 10);
+        const topLosers = changes.slice().reverse().slice(0, 10);
+        
+        updateTickerUI('ticker-gainers', topGainers);
+        updateTickerUI('ticker-losers', topLosers);
+    } catch (e) {
+        console.warn("Could not fetch market movers:", e);
+    }
+}
+
+function updateTickerUI(containerId, data) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+    
+    let html = '';
+    data.forEach(item => {
+        const sign = item.change > 0 ? '+' : '';
+        const colorClass = item.change >= 0 ? 'up' : 'down';
+        html += `
+            <div class="market-ticker-item">
+                <span class="market-ticker-symbol">${item.symbol}</span>
+                <span class="market-ticker-percent ${colorClass}">${sign}${item.change.toFixed(2)}%</span>
+            </div>
+        `;
+    });
+    
+    if (container.children.length === 2 && container.dataset.initialized === 'true') {
+        // Update inner text without recreating nodes to prevent animation resetting
+        const contents = container.querySelectorAll('.ticker-content');
+        contents.forEach(content => {
+            content.innerHTML = html;
+        });
+    } else {
+        // Two identical blocks ensure perfectly smooth loop animation
+        container.innerHTML = `
+            <div class="ticker-content">${html}</div>
+            <div class="ticker-content">${html}</div>
+        `;
+        container.dataset.initialized = 'true';
+    }
+}
+
 async function fetchAndRenderAssetInfo(symbol, forceRefresh = false) {
     const dataContainer = document.getElementById('info-panel-data');
     const loadingContainer = document.getElementById('info-panel-loading');
@@ -1858,7 +2089,6 @@ async function fetchAndRenderAssetInfo(symbol, forceRefresh = false) {
                 change24: md.price_change_percentage_24h ?? null,
                 marketCap: md.market_cap?.usd ?? null,
                 vol24: md.total_volume?.usd ?? null,
-                avgVol: md.total_volume?.usd ?? null, // Fallback to 24h vol
                 circSupply: md.circulating_supply ?? null,
                 totalSupply: md.total_supply ?? md.max_supply ?? null,
                 fdv: md.fully_diluted_valuation?.usd ?? null,
@@ -1900,7 +2130,6 @@ async function fetchAndRenderAssetInfo(symbol, forceRefresh = false) {
                     change24: parseFloat(bData.priceChangePercent),
                     marketCap: null,
                     vol24: parseFloat(bData.quoteVolume),
-                    avgVol: null,
                     circSupply: null,
                     totalSupply: null,
                     fdv: null,
@@ -1937,7 +2166,6 @@ function getEmptyAssetInfo(symbol) {
         change24: null,
         marketCap: null,
         vol24: null,
-        avgVol: null,
         circSupply: null,
         totalSupply: null,
         fdv: null,
@@ -2024,20 +2252,12 @@ function renderAssetInfo(info) {
                     <span class="info-value">${formatCurrency(info.vol24)}</span>
                 </div>
                 <div class="info-item">
-                    <span class="info-label">Avg Volume</span>
-                    <span class="info-value">${formatCurrency(info.avgVol)}</span>
-                </div>
-                <div class="info-item">
                     <span class="info-label">Circulating Supply</span>
                     <span class="info-value">${formatNumber(info.circSupply)}</span>
                 </div>
                 <div class="info-item">
                     <span class="info-label">Total Supply</span>
                     <span class="info-value">${formatNumber(info.totalSupply)}</span>
-                </div>
-                <div class="info-item">
-                    <span class="info-label">Fully Diluted Val</span>
-                    <span class="info-value">${formatCurrency(info.fdv)}</span>
                 </div>
             </div>
         </div>
