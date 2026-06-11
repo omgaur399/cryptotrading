@@ -1,5 +1,5 @@
 const CONFIG = {
-    API_BASE: "/api",
+    API_BASE: window.location.protocol === 'file:' ? "http://127.0.0.1:5000/api" : "/api",
     STORAGE_KEY: "trading-dashboard-chart-count",
     LAYOUT_STORAGE_KEY: "trading-dashboard-layout",
     THEME_STORAGE_KEY: "trading-dashboard-theme",
@@ -51,10 +51,12 @@ const TimeUtils = {
 
 const state = {
     chartCount: CONFIG.DEFAULT_CHART_COUNT,
+    activeChartId: 'chart-1',
     instruments: [],
     charts: {},
     liveStream: null,
     hlWs: null,
+    hlPingInterval: null,
     connected: false,
     theme: "dark",
 };
@@ -97,6 +99,18 @@ async function initializeApp() {
     createMarketTicker();
     fetchMarketMovers();
     
+    const marketTicker = document.getElementById('market-ticker-container');
+    if (marketTicker) {
+        marketTicker.addEventListener('click', (e) => {
+            const moverItem = e.target.closest('.market-ticker-item');
+            if (moverItem && moverItem.dataset.symbol) {
+                const symbol = moverItem.dataset.symbol;
+                const activeChartId = state.activeChartId || 'chart-1';
+                switchChartSymbol(activeChartId, symbol);
+            }
+        });
+    }
+
     setInterval(updateCountdowns, 1000);
     setInterval(updateTimestamp, 1000);
     setInterval(fetchMarketMovers, 5000);
@@ -182,7 +196,7 @@ async function loadInstruments() {
 }
 
 function connectLiveStream() {
-    // Legacy Backend SSE for Yahoo Finance
+    // Backend SSE for local Mock Data and YFinance
     if (window.EventSource && !state.liveStream) {
         state.liveStream = new EventSource(`${CONFIG.API_BASE}/live`);
         state.liveStream.onopen = () => updateConnectionStatus();
@@ -191,6 +205,8 @@ function connectLiveStream() {
             if (!event.data) return;
             handlePriceUpdate(JSON.parse(event.data));
         };
+        state.liveStream.addEventListener('status', () => updateConnectionStatus());
+        state.liveStream.addEventListener('ping', () => updateConnectionStatus());
     }
 
     // Native Hyperliquid WebSocket for all Crypto pairs
@@ -198,15 +214,32 @@ function connectLiveStream() {
         state.hlWs = new WebSocket('wss://api.hyperliquid.xyz/ws');
         state.hlWs.onopen = () => {
             updateConnectionStatus();
+            
+            // Keep the connection alive by pinging every 40 seconds
+            if (state.hlPingInterval) clearInterval(state.hlPingInterval);
+            state.hlPingInterval = setInterval(() => {
+                if (state.hlWs && state.hlWs.readyState === WebSocket.OPEN) {
+                    state.hlWs.send(JSON.stringify({ method: "ping" }));
+                }
+            }, 40000);
+            
             Object.values(state.charts).forEach(chartData => {
+                chartData.liveSubscribed = false; // Force resubscribe
                 if (chartData.source === 'hyperliquid' && chartData.symbol !== 'none') {
                     subscribeChart(chartData);
                 }
             });
         };
         state.hlWs.onclose = () => {
+            if (state.hlPingInterval) {
+                clearInterval(state.hlPingInterval);
+                state.hlPingInterval = null;
+            }
             state.hlWs = null;
             updateConnectionStatus();
+            Object.values(state.charts).forEach(chartData => {
+                chartData.liveSubscribed = false; // Reset so they resubscribe later
+            });
             setTimeout(connectLiveStream, 5000); // Reconnect loop
         };
         state.hlWs.onmessage = event => {
@@ -335,12 +368,15 @@ function renderGrid() {
             fetchAndRenderAssetInfo(chartData.symbol);
         }
     }
+
+    setActiveChart('chart-1');
 }
 
 function createChartPane(chartData, index) {
     const pane = document.createElement("section");
     pane.className = "chart-pane";
     pane.id = chartData.id;
+    pane.addEventListener('click', () => setActiveChart(chartData.id));
 
     const volText = chartData.indicators.volume ? "On" : "Off";
     const smaText = chartData.indicators.sma ? "On" : "Off";
@@ -361,15 +397,20 @@ function createChartPane(chartData, index) {
                     <div class="custom-select-dropdown"></div>
                 </div>
                 <select class="pane-select interval-select" aria-label="Timeframe"></select>
-                <select class="pane-select indicator-select" aria-label="Indicators">
-                    <option value="" disabled selected>Indicators</option>
+                <select class="pane-select indicator-select" aria-label="Indicators" title="Indicators">
+                    <option value="" disabled selected>ƒx</option>
                     <option value="volume">Volume (${volText})</option>
                     <option value="sma">SMA ${chartData.indicators.smaPeriod} (${smaText})</option>
                     <option value="ema">EMA ${chartData.indicators.emaPeriod} (${emaText})</option>
                     <option value="bb">BB ${chartData.indicators.bbPeriod} (${bbText})</option>
                     <option value="rsi">RSI ${chartData.indicators.rsiPeriod} (${rsiText})</option>
                 </select>
-                <button class="settings-btn" id="${chartData.id}-settings" title="Chart Settings">⚙️</button>
+                <button class="settings-btn" id="${chartData.id}-go-live" title="Reset Chart View">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polygon points="5 4 15 12 5 20"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
+                </button>
+                <button class="settings-btn" id="${chartData.id}-settings" title="Chart Settings">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                </button>
             </div>
         </div>
         <div class="chart-container" id="${chartData.id}-container">
@@ -387,6 +428,7 @@ function populatePaneControls(chartData) {
     const intervalSelect = pane.querySelector(".interval-select");
     const indicatorSelect = pane.querySelector(".indicator-select");
     const settingsBtn = pane.querySelector(`#${chartData.id}-settings`);
+    const goLiveBtn = pane.querySelector(`#${chartData.id}-go-live`);
 
     input.value = chartData.symbol;
 
@@ -413,6 +455,15 @@ function populatePaneControls(chartData) {
 
     settingsBtn.addEventListener("click", () => openSettingsModal(chartData));
 
+    goLiveBtn.addEventListener("click", () => {
+        if (chartData.chart) {
+            // Reset zoom (barSpacing) and right margin
+            chartData.chart.timeScale().applyOptions({ rightOffset: 3, barSpacing: 8 });
+            chartData.chart.timeScale().scrollToRealTime(); // Jump to newest candle
+            chartData.chart.priceScale('right').applyOptions({ autoScale: true });
+        }
+    });
+
     input.addEventListener("input", (e) => {
         renderOptions(e.target.value);
     });
@@ -429,39 +480,16 @@ function populatePaneControls(chartData) {
         if (e.target.classList.contains("custom-select-option")) {
             const selectedId = e.target.getAttribute("data-id");
             
+
             if (selectedId === "none") {
-                if (chartData.instrumentId !== "none") {
-                    unsubscribeChart(chartData);
-                    chartData.instrumentId = "none";
-                    chartData.source = "none";
-                    chartData.symbol = "No Chart";
-                    resetChart(chartData);
-                    saveLayoutState();
-                    if (state.chartCount === 1 && chartData.id === 'chart-1') {
-                        clearInfoPanel();
-                    }
-                }
+                switchChartSymbol(chartData.id, 'none');
             } else {
                 const instrument = state.instruments.find(item => item.id === selectedId);
                 
-                if (instrument && instrument.id !== chartData.instrumentId) {
-                    unsubscribeChart(chartData);
-                    chartData.instrumentId = instrument.id;
-                    chartData.source = instrument.source;
-                    chartData.symbol = instrument.symbol;
-                    chartData.interval = instrument.timeframes.includes(chartData.interval)
-                        ? chartData.interval
-                        : instrument.timeframes[0];
-                    updateIntervalOptions(chartData, intervalSelect);
-                    resetChart(chartData);
-                    loadChartData(chartData);
-                    saveLayoutState();
-                    if (state.chartCount === 1 && chartData.id === 'chart-1') {
-                        fetchAndRenderAssetInfo(chartData.symbol);
-                    }
+                if (instrument) {
+                    switchChartSymbol(chartData.id, instrument.symbol);
                 }
             }
-            input.value = chartData.symbol;
             dropdown.classList.remove("show");
         }
     });
@@ -529,7 +557,7 @@ function populatePaneControls(chartData) {
             }
             e.target.options[5].text = `RSI ${chartData.indicators.rsiPeriod} (${chartData.indicators.rsi ? 'On' : 'Off'})`;
         }
-        e.target.value = ""; // Reset the dropdown back to the "Indicators" placeholder
+        e.target.value = ""; // Reset the dropdown back to the "ƒx" placeholder
         saveLayoutState();
     });
 }
@@ -558,20 +586,32 @@ function initializeChart(chartData) {
             secondsVisible: false,
             borderColor: themeOptions.timeScale.borderColor,
             tickMarkFormatter: TimeUtils.formatAxis,
-            rightOffset: 35,
+            rightOffset: 3,
             barSpacing: 8,
-            shiftVisibleRangeOnNewBar: true,
+            shiftVisibleRangeOnNewBar: false,
         },
         rightPriceScale: {
             borderColor: themeOptions.rightPriceScale.borderColor,
             ticksVisible: false,
-            entireTextOnly: false,
+            entireTextOnly: true, // Forces scale to wrap tightly around the longest visible label
+            minimumWidth: 40, // Compress width as much as possible
             scaleMargins: {
                 top: 0.1,
-                bottom: 0.25, // Leave 25% empty at the bottom for volume bars
+                bottom: 0.2, // Leave 20% empty at the bottom for layered Volume and RSI
             },
         },
         crosshair: themeOptions.crosshair,
+        // Enable all native user interactions. These are defaults but are made explicit here.
+        handleScroll: {
+            mouseWheel: false, // Must be false! If true, it overrides zooming and pans instead.
+            pressedMouseMove: true, // Panning
+            horzTouchDrag: true,
+        },
+        handleScale: {
+            mouseWheel: true,
+            pinch: true, // Pinch-to-zoom on touch devices
+            axisDoubleClickReset: true, // Double-click to reset scale
+        },
     });
 
     chartData.candleSeries = chartData.chart.addCandlestickSeries({
@@ -587,11 +627,13 @@ function initializeChart(chartData) {
         priceFormat: { type: 'volume' },
         priceScaleId: '', // Place it on a separate, hidden scale
         visible: true, // Force visible on init to apply scale margins
+        lastValueVisible: false,
+        priceLineVisible: false,
     });
     chartData.volumeSeries.priceScale().applyOptions({
         scaleMargins: {
-            top: 0.7, // Push volume below the candles
-            bottom: 0.2, // Leave bottom 20% empty for RSI
+            top: 0.8, // Layer Volume at the bottom 20% of the chart
+            bottom: 0,
         },
     });
     if (!chartData.indicators.volume) {
@@ -636,6 +678,8 @@ function initializeChart(chartData) {
     
     chartData.chart.priceScale('rsi').applyOptions({
         scaleMargins: { top: 0.8, bottom: 0 },
+        entireTextOnly: true, // Compress RSI scale width
+        minimumWidth: 40, // Match main scale minimum width
     });
     
     if (!chartData.indicators.rsi) {
@@ -644,9 +688,12 @@ function initializeChart(chartData) {
     
     // Add horizontal RSI bounds (70 Overbought / 30 Oversold)
     if (chartData.rsiSeries.createPriceLine) {
-        chartData.rsiSeries.createPriceLine({ price: 70, color: '#ef4444', lineStyle: 2, axisLabelVisible: true, title: 'OB', lineWidth: 1 });
-        chartData.rsiSeries.createPriceLine({ price: 30, color: '#10b981', lineStyle: 2, axisLabelVisible: true, title: 'OS', lineWidth: 1 });
+        chartData.rsiSeries.createPriceLine({ price: 70, color: '#ef4444', lineStyle: 2, axisLabelVisible: false, title: 'OB', lineWidth: 1 });
+        chartData.rsiSeries.createPriceLine({ price: 30, color: '#10b981', lineStyle: 2, axisLabelVisible: false, title: 'OS', lineWidth: 1 });
     }
+
+    // Add diagnostics requested for wheel event investigation
+    setTimeout(() => runWheelDiagnostics(chartData.id), 1000);
 }
 
 function resetChart(chartData) {
@@ -682,14 +729,15 @@ async function loadChartData(chartData) {
             try {
                 const intervalMap = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400 };
                 const seconds = intervalMap[chartData.interval] || 3600;
-                const startTime = Date.now() - (seconds * 500 * 1000);
+                // Request 3000 candles of history from Hyperliquid instead of 500
+                const startTime = Date.now() - (seconds * 3000 * 1000);
                 
                 const res = await fetch("https://api.hyperliquid.xyz/info", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({
                         type: "candleSnapshot",
-                        req: { coin: chartData.symbol, interval: chartData.interval, startTime: startTime }
+                    req: { coin: chartData.symbol, interval: chartData.interval, startTime: startTime, endTime: Date.now() }
                     })
                 });
                 
@@ -700,7 +748,7 @@ async function loadChartData(chartData) {
             
             if (Array.isArray(hlData) && hlData.length > 0) {
                 candles = hlData.map(c => normalizeCandle({
-                    time: c.t / 1000,
+                    time: Math.floor(c.t / 1000),
                     open: c.o,
                     high: c.h,
                     low: c.l,
@@ -713,17 +761,39 @@ async function loadChartData(chartData) {
                 if (cleanSymbol === 'MATIC') cleanSymbol = 'POL';
                 if (cleanSymbol.startsWith('1000')) cleanSymbol = cleanSymbol.replace(/^1000/, '');
                 
-                const bRes = await fetch(`https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}USDT&interval=${chartData.interval}&limit=500`);
-                if (!bRes.ok) throw new Error(`No candle data for ${chartData.symbol}`);
-                const bData = await bRes.json();
+                // Maximize the historical limits for the fallback APIs
+                const endpoints = [
+                    `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}USDT&interval=${chartData.interval}&limit=1000`,
+                    `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}USDT&interval=${chartData.interval}&limit=1000`,
+                    `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}USDT&interval=${chartData.interval}&limit=1500`,
+                    `https://fapi.binance.com/fapi/v1/klines?symbol=1000${cleanSymbol}USDT&interval=${chartData.interval}&limit=1500`,
+                    `https://api.mexc.com/api/v3/klines?symbol=${cleanSymbol}USDT&interval=${chartData.interval === '1h' ? '60m' : chartData.interval}&limit=1000`,
+                    `https://api.mexc.com/api/v3/klines?symbol=1000${cleanSymbol}USDT&interval=${chartData.interval === '1h' ? '60m' : chartData.interval}&limit=1000`
+                ];
                 
-                candles = bData.map(c => normalizeCandle({
-                    time: c[0] / 1000,
-                    open: c[1],
-                    high: c[2],
-                    low: c[3],
-                    close: c[4],
-                    volume: c[5]
+                let bData = null;
+                let is1000x = false;
+                for (const url of endpoints) {
+                    try {
+                        const bRes = await fetch(url);
+                        if (bRes.ok) { 
+                            bData = await bRes.json(); 
+                            if (url.includes('symbol=1000')) is1000x = true;
+                            break; 
+                        }
+                    } catch (err) { /* Ignore ISP blocks/CORS errors and try next */ }
+                }
+                
+                if (!bData) throw new Error(`Data blocked or unavailable for ${chartData.symbol}`);
+
+                const scale = is1000x ? 1000 : 1;
+                candles = bData.filter(c => Array.isArray(c) && c.length >= 6).map(c => normalizeCandle({
+                    time: Math.floor(c[0] / 1000),
+                    open: c[1] / scale,
+                    high: c[2] / scale,
+                    low: c[3] / scale,
+                    close: c[4] / scale,
+                    volume: c[5] * scale
                 })).filter(Boolean);
             }
         } else {
@@ -736,6 +806,10 @@ async function loadChartData(chartData) {
         }
 
         if (candles.length === 0) throw new Error("No valid candle data parsed");
+        
+        // Ensure strictly ascending time order and remove duplicates to prevent chart glitches
+        candles.sort((a, b) => a.time - b.time);
+        candles = candles.filter((c, i, arr) => i === 0 || c.time > arr[i - 1].time);
         
         chartData.cachedData = candles;
 
@@ -762,7 +836,7 @@ async function loadChartData(chartData) {
             chartData.rsiSeries.setData(calculateRSI(candles, chartData.indicators.rsiPeriod));
         }
 
-        chartData.chart.timeScale().applyOptions({ rightOffset: 35, barSpacing: 8 });
+        chartData.chart.timeScale().applyOptions({ rightOffset: 3, barSpacing: 8 });
         chartData.chart.timeScale().scrollToRealTime();
 
         chartData.currentCandle = candles[candles.length - 1];
@@ -800,15 +874,13 @@ function normalizeCandle(candle) {
 function subscribeChart(chartData) {
     if (chartData.liveSubscribed || chartData.symbol === "No Chart" || chartData.symbol === "none") return;
     
-    if (chartData.source === "hyperliquid") {
-        if (state.hlWs && state.hlWs.readyState === WebSocket.OPEN) {
-            state.hlWs.send(JSON.stringify({
-                method: "subscribe",
-                subscription: { type: "trades", coin: chartData.symbol }
-            }));
-            chartData.liveSubscribed = true;
-        }
-    } else {
+    if (chartData.source === "hyperliquid" && state.hlWs && state.hlWs.readyState === WebSocket.OPEN) {
+        state.hlWs.send(JSON.stringify({
+            method: "subscribe",
+            subscription: { type: "trades", coin: chartData.symbol }
+        }));
+        chartData.liveSubscribed = true;
+    } else if (chartData.source !== "hyperliquid") {
         chartData.liveSubscribed = true;
         fetch(`${CONFIG.API_BASE}/live/subscribe`, {
             method: "POST",
@@ -1056,6 +1128,12 @@ function updateChartCountdown(chartData, now = Date.now()) {
         return;
     }
 
+        // Dynamically match the timer box width to the exact width of the price axis
+        const scaleWidth = chartData.chart.priceScale('right').width();
+        if (scaleWidth > 0) {
+            timerEl.style.width = `${scaleWidth}px`;
+        }
+
     const timerHeight = 32; 
     timerEl.style.top = `${y - (timerHeight / 2)}px`;
     
@@ -1093,7 +1171,6 @@ function updateConnectionStatus() {
     const isSSEConnected = state.liveStream && state.liveStream.readyState === 1; // 1 is OPEN
     const isWSConnected = state.hlWs && state.hlWs.readyState === 1;
     const isConnected = isSSEConnected || isWSConnected;
-
     const wasConnected = state.connected;
     state.connected = isConnected;
     
@@ -1114,6 +1191,90 @@ function setDataStatus(message) {
 
 function updateTimestamp() {
     document.getElementById("timestamp").textContent = TimeUtils.getCurrentTime();
+}
+
+function setActiveChart(chartId) {
+    if (state.activeChartId === chartId || !state.charts[chartId]) return;
+
+    if (state.activeChartId) {
+        const oldPane = document.getElementById(state.activeChartId);
+        if (oldPane) oldPane.classList.remove('active-chart');
+    }
+
+    state.activeChartId = chartId;
+    const newPane = document.getElementById(chartId);
+    if (newPane) newPane.classList.add('active-chart');
+
+    updateMarketMoverHighlights();
+}
+
+function updateMarketMoverHighlights() {
+    const activeChart = state.charts[state.activeChartId];
+    const activeSymbol = activeChart ? activeChart.symbol : null;
+
+    document.querySelectorAll('.market-ticker-item').forEach(item => {
+        item.classList.toggle('active-mover', item.dataset.symbol === activeSymbol);
+    });
+}
+
+function switchChartSymbol(chartId, newSymbol) {
+    const chartData = state.charts[chartId];
+    if (!chartData || chartData.symbol === newSymbol) return;
+
+    if (newSymbol === 'none') {
+        if (chartData.instrumentId === 'none') return;
+        unsubscribeChart(chartData);
+        chartData.instrumentId = "none";
+        chartData.source = "none";
+        chartData.symbol = "No Chart";
+
+        const pane = document.getElementById(chartId);
+        if (pane) {
+            const input = pane.querySelector(".symbol-select-input");
+            if (input) input.value = chartData.symbol;
+        }
+
+        resetChart(chartData);
+        saveLayoutState();
+        if (state.chartCount === 1 && chartData.id === 'chart-1') {
+            clearInfoPanel();
+        }
+        updateMarketMoverHighlights();
+        return;
+    }
+
+    const instrument = state.instruments.find(item => item.symbol === newSymbol);
+    if (!instrument) {
+        console.warn(`Instrument not found for symbol: ${newSymbol}`);
+        return;
+    }
+
+    unsubscribeChart(chartData);
+    chartData.instrumentId = instrument.id;
+    chartData.source = instrument.source;
+    chartData.symbol = instrument.symbol;
+    chartData.interval = instrument.timeframes.includes(chartData.interval)
+        ? chartData.interval
+        : instrument.timeframes[0];
+
+    const pane = document.getElementById(chartId);
+    if (pane) {
+        const input = pane.querySelector(".symbol-select-input");
+        if (input) input.value = chartData.symbol;
+
+        const intervalSelect = pane.querySelector(".interval-select");
+        if (intervalSelect) updateIntervalOptions(chartData, intervalSelect);
+    }
+
+    resetChart(chartData);
+    loadChartData(chartData);
+    saveLayoutState();
+
+    if (state.chartCount === 1 && chartData.id === 'chart-1') {
+        fetchAndRenderAssetInfo(chartData.symbol);
+    }
+
+    updateMarketMoverHighlights();
 }
 
 function calculateSMA(data, period) {
@@ -1493,6 +1654,11 @@ function injectThemeStyles() {
             min-height: 0 !important;
         }
 
+        /* Prevent countdown timer from blocking mouse events on the chart */
+        .countdown-timer {
+            pointer-events: none;
+        }
+
         /* Market Ticker Styles */
         .market-ticker-container {
             display: flex;
@@ -1543,18 +1709,23 @@ function injectThemeStyles() {
             width: max-content;
             animation: ticker-scroll 40s linear infinite;
         }
-        .ticker-scroll:hover {
-            animation-play-state: paused;
-        }
         .ticker-content {
             display: flex;
         }
         .market-ticker-item {
             display: inline-flex;
             align-items: center;
-            margin-right: 32px;
+            margin-right: 24px;
             gap: 6px;
-            cursor: default;
+            cursor: pointer;
+            padding: 2px 8px;
+            border-radius: 4px;
+            transition: background-color 0.2s ease;
+            border: 1px solid transparent;
+        }
+        .market-ticker-item.active-mover {
+            border-color: #3b82f6;
+            background-color: rgba(59, 130, 246, 0.1);
         }
         .market-ticker-symbol {
             font-weight: 600;
@@ -1578,6 +1749,9 @@ function injectThemeStyles() {
         body.light-theme .market-ticker-container { border-color: #cbd5e1; }
         body.light-theme .ticker-row { border-bottom: 1px solid rgba(203, 213, 225, 0.5); }
         body.light-theme .market-ticker-symbol { color: #0f172a; }
+        body.light-theme .market-ticker-item.active-mover {
+            background-color: rgba(59, 130, 246, 0.15);
+        }
 
         .settings-modal-overlay {
             position: fixed;
@@ -1678,6 +1852,15 @@ function injectThemeStyles() {
         }
         .settings-btn:hover {
             opacity: 1;
+        }
+        /* Active Chart Pane Highlight */
+        .chart-pane.active-chart {
+            border: 1px solid #3b82f6;
+            box-shadow: 0 0 8px -2px rgba(59, 130, 246, 0.5);
+        }
+        body.light-theme .chart-pane.active-chart {
+            border: 1px solid #3b82f6;
+            box-shadow: 0 0 8px -1px rgba(59, 130, 246, 0.4);
         }
         /* Asset Info Panel Styles */
         .charts-grid.layout-1.with-info-panel {
@@ -1868,6 +2051,7 @@ function getChartThemeOptions(isLight) {
         layout: {
             background: { color: isLight ? "#ffffff" : "#11161d" },
             textColor: isLight ? "#1e293b" : "#d8dee8",
+            fontSize: 10, // Reduce native chart text size to shrink axis width
         },
         grid: {
             vertLines: { color: isLight ? "#f1f5f9" : "#26313d" },
@@ -1990,12 +2174,18 @@ function updateTickerUI(containerId, data) {
     const container = document.getElementById(containerId);
     if (!container) return;
     
+    const activeChart = state.charts[state.activeChartId];
+    const activeSymbol = activeChart ? activeChart.symbol : null;
+
     let html = '';
     data.forEach(item => {
         const sign = item.change > 0 ? '+' : '';
         const colorClass = item.change >= 0 ? 'up' : 'down';
+        const isActive = item.symbol === activeSymbol;
+        const activeClass = isActive ? 'active-mover' : '';
         html += `
             <div class="market-ticker-item">
+            <div class="market-ticker-item ${activeClass}" data-symbol="${item.symbol}" title="Click to load ${item.symbol} chart">
                 <span class="market-ticker-symbol">${item.symbol}</span>
                 <span class="market-ticker-percent ${colorClass}">${sign}${item.change.toFixed(2)}%</span>
             </div>
@@ -2051,7 +2241,25 @@ async function fetchAndRenderAssetInfo(symbol, forceRefresh = false) {
                 "XLM": "stellar", "HBAR": "hedera-hashgraph", "VET": "vechain", "ALGO": "algorand", "GRT": "the-graph",
                 "EGLD": "elrond-erd-2", "AAVE": "aave", "SNX": "havven", "THETA": "theta-token", "EOS": "eos",
                 "XTZ": "tezos", "MANA": "decentraland", "SAND": "the-sandbox", "AXS": "axie-infinity",
-                "GALA": "gala", "CRV": "curve-dao-token", "MKR": "maker", "STRK": "starknet", "ENA": "ethena"
+                "GALA": "gala", "CRV": "curve-dao-token", "MKR": "maker", "STRK": "starknet", "ENA": "ethena",
+                "MEW": "cat-in-a-dogs-world", "POPCAT": "popcat", "SLERF": "slerf", "PENGU": "penguiana",
+                "OM": "mantra-dao", "TAO": "bittensor", "AR": "arweave", "TRB": "tellor", "SATS": "sats",
+                "RATS": "rats", "ZIG": "zignaly", "MYRO": "myro", "NFP": "nfprompt", "ALT": "altlayer",
+                "AI": "sleepless-ai", "XAI": "xai", "MANTA": "manta-network", "MEME": "memecoin",
+                "ACE": "fusionist", "NTRN": "neutron", "BIGTIME": "big-time", "BLUR": "blur",
+                "SUPER": "superfarm", "ILV": "illuvium", "BEAM": "beam-2", "MAGIC": "magic",
+                "GMX": "gmx", "COMP": "compound-governance-token", "1INCH": "1inch", "YFI": "yearn-finance",
+                "SUSHI": "sushi", "UNI": "uniswap", "CAKE": "pancakeswap-token", "SSV": "ssv-network",
+                "EDU": "open-campus", "ID": "space-id", "HOOK": "hooked-protocol", "LQTY": "liquity",
+                "FXS": "frax", "GNS": "gains-network", "PENDLE": "pendle", "RDNT": "radiant-capital",
+                "GTC": "gitcoin", "BAND": "band-protocol", "CYBER": "cyberconnect", "ARKM": "arkham",
+                "PORTAL": "portal", "PIXEL": "pixels", "MAVIA": "heroes-of-mavia", "GMT": "stepn",
+                "LUNA": "terra-luna-2", "DASH": "dash", "ZEC": "zcash", "IOTA": "iota", "NEO": "neo",
+                "CHZ": "chiliz", "BAT": "basic-attention-token", "ENJ": "enjincoin", "ZIL": "zilliqa",
+                "KAVA": "kava", "RVN": "ravencoin", "WAVES": "waves", "ONT": "ontology", "ICX": "icon",
+                "QTUM": "qtum", "NANO": "nano", "OMG": "omg", "ZRX": "0x", "CELO": "celo", "BAL": "balancer",
+                "HYPE": "hyperliquid", "ZETA": "zetachain", "ONDO": "ondo-finance", "AERO": "aerodrome-finance",
+                "JTO": "jito-governance-token", "ETHFI": "ether-fi", "BOME": "book-of-meme"
             };
 
             const upperClean = cleanSymbol.toUpperCase();
@@ -2119,14 +2327,36 @@ async function fetchAndRenderAssetInfo(symbol, forceRefresh = false) {
                 if (cleanSymbol.startsWith('1000')) cleanSymbol = cleanSymbol.replace(/^1000/, '');
                 if (cleanSymbol === 'MATIC') cleanSymbol = 'POL';
                 
-                const binanceRes = await fetch(`https://api.binance.com/api/v3/ticker/24hr?symbol=${cleanSymbol}USDT`);
-                if (!binanceRes.ok) throw new Error('Binance failed');
-                const bData = await binanceRes.json();
+                const endpoints = [
+                    `https://api.binance.com/api/v3/ticker/24hr?symbol=${cleanSymbol}USDT`,
+                    `https://data-api.binance.vision/api/v3/ticker/24hr?symbol=${cleanSymbol}USDT`,
+                    `https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${cleanSymbol}USDT`,
+                    `https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=1000${cleanSymbol}USDT`,
+                    `https://api.mexc.com/api/v3/ticker/24hr?symbol=${cleanSymbol}USDT`,
+                    `https://api.mexc.com/api/v3/ticker/24hr?symbol=1000${cleanSymbol}USDT`
+                ];
+
+                let bData = null;
+                let is1000x = false;
+                for (const url of endpoints) {
+                    try {
+                        const binanceRes = await fetch(url);
+                        if (binanceRes.ok) { 
+                            bData = await binanceRes.json(); 
+                            if (url.includes('symbol=1000')) is1000x = true;
+                            break; 
+                        }
+                    } catch (err) { /* Ignore ISP blocks/CORS errors and try next */ }
+                }
                 
+                if (!bData) throw new Error('All fallbacks failed');
+
+                const scale = is1000x ? 1000 : 1;
+
                 assetInfoCache[symbol] = {
                     symbol: cleanSymbol,
                     name: cleanSymbol,
-                    price: parseFloat(bData.lastPrice),
+                    price: parseFloat(bData.lastPrice) / scale,
                     change24: parseFloat(bData.priceChangePercent),
                     marketCap: null,
                     vol24: parseFloat(bData.quoteVolume),
@@ -2139,8 +2369,8 @@ async function fetchAndRenderAssetInfo(symbol, forceRefresh = false) {
                         '7D': null, '30D': null, '60D': null, '200D': null, '1Y': null,
                     },
                     rank: '-', category: 'Crypto', exchanges: '-', pairs: '-',
-                    high24: parseFloat(bData.highPrice),
-                    low24: parseFloat(bData.lowPrice),
+                    high24: parseFloat(bData.highPrice) / scale,
+                    low24: parseFloat(bData.lowPrice) / scale,
                     ath: null, atl: null, image: null,
                     isPartial: true
                 };
@@ -2325,4 +2555,50 @@ function updateInfoPanelPrice(price) {
     if (priceEl && price !== null) {
         priceEl.textContent = formatCurrency(price);
     }
+}
+
+// --- Diagnostics for Wheel Events ---
+function runWheelDiagnostics(chartId) {
+    const container = document.getElementById(`${chartId}-container`);
+    if (!container) return;
+    
+    console.group(`🔍 Wheel Event Investigation: ${chartId}`);
+    console.log("1. Exact DOM element acting as container:", container);
+    
+    const canvas = container.querySelector('canvas');
+    if (canvas) {
+        const containerRect = container.getBoundingClientRect();
+        const canvasRect = canvas.getBoundingClientRect();
+        console.log(`2. Canvas fills area? Container: ${containerRect.width}x${containerRect.height}, Canvas: ${canvasRect.width}x${canvasRect.height}`);
+        console.log("7. Canvas Z-Index:", window.getComputedStyle(canvas).zIndex || 'auto');
+        
+        const getPath = (el) => {
+            const path = [];
+            while (el && el !== document.body && el !== document.documentElement) {
+                let name = el.tagName.toLowerCase();
+                if (el.id) name += `#${el.id}`;
+                if (el.className && typeof el.className === 'string') name += `.${el.className.split(' ').join('.')}`;
+                path.unshift(name);
+                el = el.parentNode;
+            }
+            return path.join(' > ');
+        };
+        console.log("8. DOM Path to Canvas:", getPath(canvas));
+    }
+
+    let node = container;
+    while (node && node !== document) {
+        const style = window.getComputedStyle(node);
+        if (['auto', 'scroll'].includes(style.overflow) || ['auto', 'scroll'].includes(style.overflowY)) {
+            console.warn(`4. Scrollable parent found:`, node, `overflow: ${style.overflow}`);
+        }
+        node = node.parentNode;
+    }
+
+    const tracker = (source) => (e) => console.log(`[Wheel Event] Captured by ${source} | Target:`, e.target);
+    window.addEventListener('wheel', tracker('Window'), { capture: true, passive: true });
+    document.addEventListener('wheel', tracker('Document'), { capture: true, passive: true });
+    container.addEventListener('wheel', tracker('Chart Container'), { capture: true, passive: true });
+    if (canvas) canvas.addEventListener('wheel', tracker('Chart Canvas'), { capture: true, passive: true });
+    console.groupEnd();
 }

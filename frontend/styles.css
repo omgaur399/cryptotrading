@@ -140,22 +140,33 @@ select {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     gap: 4px;
-    min-height: 26px;
-    padding: 2px 4px;
+    height: 32px;
+    padding: 0 6px;
     background: var(--panel-2);
     border-bottom: 1px solid var(--border);
     transition: background-color 180ms ease;
     flex-shrink: 0;
+    overflow: hidden;
 }
 
-.pane-ticker,
+.pane-ticker {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    flex-shrink: 1;
+    overflow: hidden;
+}
+
 .pane-controls {
     display: flex;
     align-items: center;
     gap: 4px;
     min-width: 0;
+    flex-shrink: 0;
+    flex-wrap: nowrap;
 }
 
 .ticker-symbol {
@@ -187,29 +198,30 @@ select {
 }
 
 .pane-select {
-    width: 75px;
     min-width: 0;
-    height: 20px;
-    font-size: 10px;
-    padding: 0 2px;
+    height: 22px;
+    font-size: 11px;
+    padding: 0 4px;
     margin: 0;
+    border-radius: 4px;
+    cursor: pointer;
 }
 
 .symbol-select-container {
     position: relative;
-    width: 75px;
+    width: 65px;
     min-width: 0;
-    height: 20px;
+    height: 22px;
 }
 
 .symbol-select-input {
     width: 100%;
     height: 100%;
     border: 1px solid var(--border);
-    border-radius: 6px;
+    border-radius: 4px;
     background: #10161f;
     color: var(--text);
-    font-size: 10px;
+    font-size: 11px;
     padding: 0 4px;
     margin: 0;
     display: block;
@@ -252,7 +264,89 @@ select {
 }
 
 .interval-select {
-    width: 45px;
+    width: 48px;
+}
+
+.indicator-select {
+    width: 34px;
+    padding: 0;
+    text-align: center;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+}
+
+/* Ultra-compact styles for high chart counts */
+.layout-4 .pane-header {
+    height: 30px;
+    padding: 0 4px;
+}
+
+.layout-6 .pane-header,
+.layout-8 .pane-header {
+    height: 26px;
+    padding: 0 4px;
+    gap: 2px;
+}
+
+.layout-6 .pane-ticker,
+.layout-8 .pane-ticker {
+    gap: 4px;
+}
+
+.layout-6 .pane-controls,
+.layout-8 .pane-controls {
+    gap: 3px;
+}
+
+.layout-6 .ticker-symbol,
+.layout-8 .ticker-symbol,
+.layout-6 .ticker-price,
+.layout-8 .ticker-price,
+.layout-6 .ticker-change,
+.layout-8 .ticker-change {
+    font-size: 10px;
+}
+
+.layout-6 .symbol-select-container,
+.layout-8 .symbol-select-container {
+    width: 55px;
+    height: 18px;
+}
+
+.layout-6 .interval-select,
+.layout-8 .interval-select {
+    width: 42px;
+}
+
+.layout-6 .indicator-select,
+.layout-8 .indicator-select {
+    width: 28px;
+}
+
+.layout-6 .pane-select,
+.layout-8 .pane-select {
+    height: 18px;
+    font-size: 10px;
+}
+
+.layout-6 .symbol-select-input,
+.layout-8 .symbol-select-input {
+    height: 18px;
+    font-size: 10px;
+    padding: 0 2px;
+}
+
+.layout-6 .settings-btn,
+.layout-8 .settings-btn {
+    padding: 2px;
+    margin-left: 0;
+}
+
+.layout-6 .settings-btn svg,
+.layout-8 .settings-btn svg {
+    width: 13px;
+    height: 13px;
 }
 
 .chart-container {
@@ -277,18 +371,17 @@ select {
 .countdown-timer {
     position: absolute;
     right: 0;
-    width: 48px; /* Slightly wider for the timer format */
+    padding: 0;
     height: 32px;
     display: none;
     flex-direction: column;
     justify-content: center;
     align-items: center;
-    font-size: 11px;
+    font-size: 10px; /* Matched to chart fontSize */
     font-weight: bold;
     color: #ffffff;
     pointer-events: none;
     z-index: 10;
-    border-radius: 2px 0 0 2px;
 }
 
 .countdown-timer.up {
@@ -303,7 +396,7 @@ select {
 }
 
 .countdown-timer .timer-val {
-    font-size: 9px;
+    font-size: 8px; /* Slightly smaller for the countdown string */
     font-weight: normal;
     opacity: 0.85;
     margin-top: 1px;

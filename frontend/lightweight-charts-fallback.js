@@ -29,6 +29,12 @@ if (!window.LightweightCharts) {
                 this.svg.appendChild(this.axisGroup);
                 this._drawGrid();
 
+                // Prevent the scrollable parent (main.dashboard-main) from scrolling
+                // when the user accidentally scrolls over the fallback chart.
+                this.container.addEventListener('wheel', (e) => {
+                    e.preventDefault();
+                }, { passive: false });
+
                 this.resizeObserver = new ResizeObserver(() => {
                     this.width = Math.max(container.clientWidth || 800, 240);
                     this.height = Math.max(container.clientHeight || 360, 220);
