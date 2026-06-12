@@ -3,6 +3,7 @@ const CONFIG = {
     STORAGE_KEY: "trading-dashboard-chart-count",
     LAYOUT_STORAGE_KEY: "trading-dashboard-layout",
     THEME_STORAGE_KEY: "trading-dashboard-theme",
+    DRAWINGS_STORAGE_KEY: "trading-dashboard-drawings",
     DEFAULT_CHART_COUNT: 4,
     ALLOWED_COUNTS: [1, 2, 4, 6, 8],
 };
@@ -55,6 +56,7 @@ const state = {
     instruments: [],
     charts: {},
     liveStream: null,
+    drawings: {},
     hlWs: null,
     hlPingInterval: null,
     connected: false,
@@ -74,6 +76,15 @@ async function initializeApp() {
     if (state.theme === "light") document.body.classList.add("light-theme");
     injectThemeStyles();
 
+    const savedDrawings = localStorage.getItem(CONFIG.DRAWINGS_STORAGE_KEY);
+    if (savedDrawings) {
+        try {
+            state.drawings = JSON.parse(savedDrawings);
+        } catch (e) {
+            state.drawings = {};
+        }
+    }
+
     state.chartCount = readSavedChartCount();
     document.getElementById("chart-count").value = String(state.chartCount);
     document.getElementById("chart-count").addEventListener("change", event => {
@@ -82,6 +93,27 @@ async function initializeApp() {
 
     const chartCountEl = document.getElementById("chart-count");
     if (chartCountEl && chartCountEl.parentNode) {
+        const toolsSelect = document.createElement("select");
+        toolsSelect.id = "global-tools-select";
+        toolsSelect.className = "theme-btn";
+        toolsSelect.style.marginLeft = "12px";
+        toolsSelect.innerHTML = `
+            <option value="" disabled selected>Tools</option>
+            <option value="hline">✏️ Horizontal Line</option>
+        `;
+        toolsSelect.addEventListener("change", (e) => {
+            const tool = e.target.value;
+            if (tool === "hline") {
+                Object.values(state.charts).forEach(chartData => {
+                    chartData.drawingMode = "hline";
+                    const container = document.getElementById(`${chartData.id}-container`);
+                    if (container) container.style.cursor = "crosshair";
+                });
+            }
+            e.target.value = "";
+        });
+        chartCountEl.parentNode.appendChild(toolsSelect);
+
         const themeBtn = document.createElement("button");
         themeBtn.id = "theme-toggle";
         themeBtn.className = "theme-btn";
@@ -250,7 +282,8 @@ function connectLiveStream() {
                         source: 'hyperliquid',
                         symbol: trade.coin,
                         price: parseFloat(trade.px),
-                        time: trade.time / 1000
+                        time: trade.time / 1000,
+                        volume: parseFloat(trade.sz)
                     });
                 });
             }
@@ -461,6 +494,11 @@ function populatePaneControls(chartData) {
             chartData.chart.timeScale().applyOptions({ rightOffset: 3, barSpacing: 8 });
             chartData.chart.timeScale().scrollToRealTime(); // Jump to newest candle
             chartData.chart.priceScale('right').applyOptions({ autoScale: true });
+            
+            // Re-unlock the Y-axis after snapping to allow vertical dragging again
+            setTimeout(() => {
+                if (chartData.chart) chartData.chart.priceScale('right').applyOptions({ autoScale: false });
+            }, 50);
         }
     });
 
@@ -571,6 +609,7 @@ function updateIntervalOptions(chartData, intervalSelect) {
 
 function initializeChart(chartData) {
     const container = document.getElementById(`${chartData.id}-container`);
+    container.style.position = 'relative'; // Ensure absolute positioning works for overlays
     const isLight = state.theme === "light";
     const themeOptions = getChartThemeOptions(isLight);
 
@@ -593,6 +632,8 @@ function initializeChart(chartData) {
         rightPriceScale: {
             borderColor: themeOptions.rightPriceScale.borderColor,
             ticksVisible: false,
+            autoScale: false, // Disables the vertical lock, allowing free up/down dragging immediately
+            autoScale: true,
             entireTextOnly: true, // Forces scale to wrap tightly around the longest visible label
             minimumWidth: 40, // Compress width as much as possible
             scaleMargins: {
@@ -612,6 +653,175 @@ function initializeChart(chartData) {
             pinch: true, // Pinch-to-zoom on touch devices
             axisDoubleClickReset: true, // Double-click to reset scale
         },
+    });
+
+    // --- Custom Drag & Hover Overlay Logic ---
+    const deleteBtn = document.createElement('div');
+    deleteBtn.className = 'hover-delete-btn';
+    deleteBtn.innerHTML = '✖';
+    deleteBtn.style.display = 'none';
+    deleteBtn.title = 'Delete Line';
+    container.appendChild(deleteBtn);
+    chartData.hoverDeleteBtn = deleteBtn;
+
+    deleteBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const id = chartData.hoveredLineId;
+        if (!id) return;
+        const key = `${chartData.symbol}_${chartData.interval}`;
+        const lines = state.drawings[key];
+        if (lines) {
+            const idx = lines.findIndex(l => l.id === id);
+            if (idx !== -1) {
+                const pl = chartData.renderedDrawings[id];
+                if (pl) {
+                    try { chartData.candleSeries.removePriceLine(pl); } catch(err){}
+                    delete chartData.renderedDrawings[id];
+                }
+                lines.splice(idx, 1);
+                saveDrawings();
+            }
+        }
+        deleteBtn.style.display = 'none';
+        container.classList.remove('hovering-line');
+    });
+
+    let isDragging = false;
+    let draggingLineInfo = null;
+
+    container.addEventListener('mousedown', (e) => {
+        if (chartData.drawingMode === 'hline') return;
+        const rect = container.getBoundingClientRect();
+        const y = e.clientY - rect.top;
+        if (!chartData.candleSeries) return;
+        const clickedPrice = chartData.candleSeries.coordinateToPrice(y);
+        if (clickedPrice === null) return;
+
+        const key = `${chartData.symbol}_${chartData.interval}`;
+        const lines = state.drawings[key];
+        if (!lines) return;
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i];
+            if (line.type !== 'horizontalLine') continue;
+            const lineY = chartData.candleSeries.priceToCoordinate(line.price);
+            if (lineY !== null && Math.abs(y - lineY) < 10) {
+                isDragging = true;
+                draggingLineInfo = { line, index: i, key, startY: y };
+                // Temporarily disable panning
+                chartData.chart.applyOptions({ handleScroll: { pressedMouseMove: false } });
+                break;
+            }
+        }
+    }, { capture: true });
+
+    container.addEventListener('mousemove', (e) => {
+        const rect = container.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        // Handle dragging updates
+        if (isDragging && draggingLineInfo) {
+            if (Math.abs(y - draggingLineInfo.startY) > 3) {
+                chartData.justDragged = true;
+            }
+            const newPrice = chartData.candleSeries.coordinateToPrice(y);
+            if (newPrice !== null) {
+                draggingLineInfo.line.price = newPrice;
+                const pl = chartData.renderedDrawings[draggingLineInfo.line.id];
+                if (pl && pl.applyOptions) pl.applyOptions({ price: newPrice });
+            }
+            chartData.hoverDeleteBtn.style.display = 'none';
+            return;
+        }
+
+        // Handle hover displays
+        if (!chartData.candleSeries || chartData.drawingMode === 'hline') {
+            chartData.hoverDeleteBtn.style.display = 'none';
+            container.classList.remove('hovering-line');
+            return;
+        }
+
+        const hoverPrice = chartData.candleSeries.coordinateToPrice(y);
+        let hoveredLine = null;
+        let hoveredLineY = null;
+
+        if (hoverPrice !== null) {
+            const key = `${chartData.symbol}_${chartData.interval}`;
+            const lines = state.drawings[key];
+            if (lines) {
+                for (let line of lines) {
+                    if (line.type !== 'horizontalLine') continue;
+                    const lineY = chartData.candleSeries.priceToCoordinate(line.price);
+                    if (lineY !== null && Math.abs(y - lineY) < 10) {
+                        hoveredLine = line;
+                        hoveredLineY = lineY;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (hoveredLine) {
+            let currentLeft = parseFloat(chartData.hoverDeleteBtn.style.left) || 0;
+            
+            // Only move the button if it's a new line, or if the mouse gets more than 50px away
+            if (chartData.hoveredLineId !== hoveredLine.id || Math.abs(x - currentLeft) > 50) {
+                const safeX = Math.min(x + 15, rect.width - 50); // Keep it away from the right-side price scale
+                chartData.hoverDeleteBtn.style.left = `${safeX}px`;
+            }
+            
+            chartData.hoverDeleteBtn.style.display = 'flex';
+            chartData.hoverDeleteBtn.style.top = `${hoveredLineY - 9}px`;
+            chartData.hoveredLineId = hoveredLine.id;
+            container.classList.add('hovering-line');
+        } else {
+            chartData.hoverDeleteBtn.style.display = 'none';
+            chartData.hoveredLineId = null;
+            container.classList.remove('hovering-line');
+        }
+    });
+
+    const finishDrag = () => {
+        if (isDragging) {
+            isDragging = false;
+            saveDrawings();
+            // Re-enable panning
+            chartData.chart.applyOptions({ handleScroll: { pressedMouseMove: true } });
+            if (chartData.justDragged) {
+                setTimeout(() => chartData.justDragged = false, 50);
+            }
+        }
+    };
+
+    container.addEventListener('mouseup', finishDrag);
+    container.addEventListener('mouseleave', () => {
+        finishDrag();
+        chartData.hoverDeleteBtn.style.display = 'none';
+        container.classList.remove('hovering-line');
+    });
+
+    chartData.chart.subscribeClick((param) => {
+        if (chartData.justDragged) return; // Ignore native clicks resolving immediately after a drag
+        
+        if (!param.point || !chartData.candleSeries) return;
+
+        if (chartData.drawingMode === "hline") {
+            const price = chartData.candleSeries.coordinateToPrice(param.point.y);
+            if (price !== null) {
+                addHorizontalLine(chartData, price);
+            }
+            Object.values(state.charts).forEach(cd => {
+                cd.drawingMode = null;
+                const container = document.getElementById(`${cd.id}-container`);
+                if (container) container.style.cursor = "default";
+            });
+        } else {
+            const clickedPrice = chartData.candleSeries.coordinateToPrice(param.point.y);
+            if (clickedPrice !== null) {
+                checkAndInteractWithLine(chartData, clickedPrice);
+            }
+        }
     });
 
     chartData.candleSeries = chartData.chart.addCandlestickSeries({
@@ -710,8 +920,191 @@ function resetChart(chartData) {
     if (chartData.bbMiddleSeries) chartData.bbMiddleSeries.setData([]);
     if (chartData.bbLowerSeries) chartData.bbLowerSeries.setData([]);
     if (chartData.rsiSeries) chartData.rsiSeries.setData([]);
+    
+    chartData.drawingMode = null;
+    const container = document.getElementById(`${chartData.id}-container`);
+    if (container) container.style.cursor = "default";
+
+    if (chartData.renderedDrawings && chartData.candleSeries) {
+        Object.values(chartData.renderedDrawings).forEach(pl => {
+            try {
+                chartData.candleSeries.removePriceLine(pl);
+            } catch(e) {}
+        });
+        chartData.renderedDrawings = {};
+    }
+
     setPaneMessage(chartData.id, chartData.instrumentId === "none" ? "No Chart Selected" : "Loading");
     updateTicker(chartData, null, null);
+}
+
+function saveDrawings() {
+    localStorage.setItem(CONFIG.DRAWINGS_STORAGE_KEY, JSON.stringify(state.drawings));
+}
+
+function addHorizontalLine(chartData, price) {
+    const key = `${chartData.symbol}_${chartData.interval}`;
+    if (!state.drawings[key]) state.drawings[key] = [];
+    
+    const isLight = state.theme === 'light';
+    const id = Date.now().toString() + Math.random().toString().slice(2, 6);
+    const lineObj = {
+        type: "horizontalLine",
+        symbol: chartData.symbol,
+        timeframe: chartData.interval,
+        price: price,
+        id: id,
+        color: isLight ? '#3b82f6' : '#60a5fa',
+        lineWidth: 2
+    };
+    state.drawings[key].push(lineObj);
+    saveDrawings();
+    renderHorizontalLine(chartData, lineObj);
+}
+
+function renderHorizontalLine(chartData, lineObj) {
+    if (!chartData.candleSeries) return;
+    
+    const isLight = state.theme === 'light';
+    const color = lineObj.color || (isLight ? '#3b82f6' : '#60a5fa');
+    const lineWidth = lineObj.lineWidth || 2;
+    const priceLine = chartData.candleSeries.createPriceLine({
+        price: lineObj.price,
+        color: color,
+        lineWidth: lineWidth,
+        lineStyle: 0, // Solid
+        axisLabelVisible: true,
+        title: '',
+    });
+    
+    if (!chartData.renderedDrawings) chartData.renderedDrawings = {};
+    chartData.renderedDrawings[lineObj.id] = priceLine;
+}
+
+function checkAndInteractWithLine(chartData, clickedPrice) {
+    const key = `${chartData.symbol}_${chartData.interval}`;
+    if (!state.drawings[key]) return;
+    
+    if (!chartData.candleSeries) return;
+    const clickedY = chartData.candleSeries.priceToCoordinate(clickedPrice);
+    if (clickedY === null) return;
+    
+    const lines = state.drawings[key];
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        if (line.type === "horizontalLine") {
+            const lineY = chartData.candleSeries.priceToCoordinate(line.price);
+            if (lineY !== null && Math.abs(clickedY - lineY) < 10) {
+                openLineSettingsModal(chartData, line, key, i);
+                break;
+            }
+        }
+    }
+}
+
+function openLineSettingsModal(chartData, lineObj, key, index) {
+    let modal = document.getElementById("line-settings-modal");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "line-settings-modal";
+        modal.className = "settings-modal-overlay";
+        document.body.appendChild(modal);
+    }
+
+    const isLight = state.theme === 'light';
+    const defaultColor = isLight ? '#3b82f6' : '#60a5fa';
+    const color = lineObj.color || defaultColor;
+    const lineWidth = lineObj.lineWidth || 2;
+
+    modal.innerHTML = `
+        <div class="settings-modal-content" style="width: 280px;">
+            <h3>Horizontal Line Settings</h3>
+            <div class="settings-group">
+                <label>Price</label>
+                <input type="number" id="line-price-input" value="${lineObj.price}" step="0.01">
+            </div>
+            <div class="settings-group">
+                <label>Color</label>
+                <input type="color" id="line-color-input" value="${color}">
+            </div>
+            <div class="settings-group">
+                <label>Thickness</label>
+                <select id="line-width-input">
+                    <option value="1" ${lineWidth == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${lineWidth == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${lineWidth == 3 ? 'selected' : ''}>Thick</option>
+                    <option value="4" ${lineWidth == 4 ? 'selected' : ''}>Extra Thick</option>
+                </select>
+            </div>
+            <div class="settings-actions">
+                <button id="line-delete-btn">Delete</button>
+                <button id="line-cancel-btn">Cancel</button>
+                <button id="line-save-btn">Save</button>
+            </div>
+        </div>
+    `;
+    
+    modal.style.display = "flex";
+
+    document.getElementById("line-cancel-btn").onclick = () => {
+        modal.style.display = "none";
+    };
+
+    document.getElementById("line-delete-btn").onclick = () => {
+        const priceLine = chartData.renderedDrawings?.[lineObj.id];
+        if (priceLine) {
+            try {
+                chartData.candleSeries.removePriceLine(priceLine);
+            } catch (e) {}
+            delete chartData.renderedDrawings[lineObj.id];
+        }
+        state.drawings[key].splice(index, 1);
+        saveDrawings();
+        modal.style.display = "none";
+    };
+
+    document.getElementById("line-save-btn").onclick = () => {
+        const newPrice = parseFloat(document.getElementById("line-price-input").value);
+        const newColor = document.getElementById("line-color-input").value;
+        const newWidth = parseInt(document.getElementById("line-width-input").value, 10);
+        
+        lineObj.price = isNaN(newPrice) ? lineObj.price : newPrice;
+        lineObj.color = newColor;
+        lineObj.lineWidth = newWidth;
+        
+        const priceLine = chartData.renderedDrawings?.[lineObj.id];
+        if (priceLine && priceLine.applyOptions) {
+            priceLine.applyOptions({
+                price: lineObj.price,
+                color: lineObj.color,
+                lineWidth: lineObj.lineWidth
+            });
+        }
+        
+        saveDrawings();
+        modal.style.display = "none";
+    };
+}
+
+function restoreDrawings(chartData) {
+    if (chartData.renderedDrawings && chartData.candleSeries) {
+        Object.values(chartData.renderedDrawings).forEach(pl => {
+            if (pl) {
+                try {
+                    chartData.candleSeries.removePriceLine(pl);
+                } catch(e) {}
+            }
+        });
+    }
+    chartData.renderedDrawings = {};
+    
+    const key = `${chartData.symbol}_${chartData.interval}`;
+    const lines = state.drawings[key];
+    if (lines) {
+        lines.forEach(lineObj => {
+            renderHorizontalLine(chartData, lineObj);
+        });
+    }
 }
 
 async function loadChartData(chartData) {
@@ -839,6 +1232,13 @@ async function loadChartData(chartData) {
         chartData.chart.timeScale().applyOptions({ rightOffset: 3, barSpacing: 8 });
         chartData.chart.timeScale().scrollToRealTime();
 
+        // Let the chart auto-scale perfectly to the data, then unlock the Y-axis
+        // so you can instantly drag the candles up and down with the mouse.
+        chartData.chart.priceScale('right').applyOptions({ autoScale: true });
+        setTimeout(() => {
+            if (chartData.chart) chartData.chart.priceScale('right').applyOptions({ autoScale: false });
+        }, 50);
+
         chartData.currentCandle = candles[candles.length - 1];
         chartData.referencePrice = candles.length > 1 ? candles[candles.length - 2].close : chartData.currentCandle.open;
         
@@ -847,6 +1247,8 @@ async function loadChartData(chartData) {
         chartData.candleSeries.applyOptions({
             priceLineColor: isUp ? "#16a34a" : "#dc2626"
         });
+
+        restoreDrawings(chartData);
 
         updateTicker(chartData, chartData.currentCandle.close, chartData.referencePrice);
         clearPaneMessage(chartData.id);
@@ -917,9 +1319,10 @@ function handlePriceUpdate(tick) {
 function applyPriceUpdate(chartData, tick) {
     const price = Number(tick.price);
     const time = Number(tick.time);
+    const volume = Number(tick.volume) || 0;
     if (!Number.isFinite(price) || !Number.isFinite(time)) return;
 
-    const candle = buildRealtimeCandle(chartData, time, price);
+    const candle = buildRealtimeCandle(chartData, time, price, volume);
     
     // Cache maintenance
     if (chartData.cachedData.length > 0) {
@@ -997,7 +1400,7 @@ function flushChartUpdate(chartData) {
     }
 }
 
-function buildRealtimeCandle(chartData, time, price) {
+function buildRealtimeCandle(chartData, time, price, volume) {
     const bucket = bucketTime(time, chartData.interval);
     const current = chartData.currentCandle;
     if (!current || current.time !== bucket) {
@@ -1010,7 +1413,7 @@ function buildRealtimeCandle(chartData, time, price) {
             high: price,
             low: price,
             close: price,
-            volume: 0,
+                volume: volume,
         };
         return chartData.currentCandle;
     }
@@ -1018,7 +1421,7 @@ function buildRealtimeCandle(chartData, time, price) {
     current.high = Math.max(current.high, price);
     current.low = Math.min(current.low, price);
     current.close = price;
-    current.volume += 1; // Tick increment fallback
+        current.volume += volume;
     return current;
 }
 
@@ -1639,14 +2042,45 @@ function injectThemeStyles() {
         }
         body.light-theme .theme-btn:hover { background-color: #cbd5e1; }
         
+        /* Compact top header to maximize chart area */
+        header, .header, .dashboard-header {
+            padding: 6px 16px !important;
+            min-height: unset !important;
+            display: flex !important;
+            align-items: center !important;
+        }
+        header h1, .header h1, .dashboard-header h1 {
+            font-size: 18px !important;
+            margin: 0 !important;
+            line-height: 1 !important;
+        }
+        #chart-count, .theme-btn {
+            padding-top: 2px !important;
+            padding-bottom: 2px !important;
+            height: 26px !important;
+        }
+
+        /* Compact footer to prevent scrolling */
+        footer, .footer, .status-bar, #status-bar {
+            height: 24px !important;
+            min-height: 24px !important;
+            padding: 0 16px !important;
+            display: flex !important;
+            align-items: center !important;
+        }
+        .status-indicator, #timestamp, #data-status {
+            font-size: 11px !important;
+        }
+
         /* Lock body to screen and prevent scrolling completely */
         html, body {
             overflow: hidden !important;
         }
 
-        /* Ensure grid fits on screen with the new ticker */
+        /* Ensure grid expands into the space saved by the compacted header */
         .charts-grid {
-            height: calc(100vh - 140px) !important; 
+            height: calc(100vh - 105px) !important; 
+            height: calc(100vh - 118px) !important; 
             min-height: 0 !important;
         }
         /* Allow charts to shrink below their default min-height */
@@ -1753,6 +2187,47 @@ function injectThemeStyles() {
             background-color: rgba(59, 130, 246, 0.15);
         }
 
+        /* Hover Icon & Drag Interactions */
+        .hover-delete-btn {
+            position: absolute !important;
+            width: 18px !important;
+            height: 18px !important;
+            min-width: 18px !important;
+            max-width: 18px !important;
+            min-height: 18px !important;
+            max-height: 18px !important;
+            background: #151b23;
+            color: #ef4444;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 100;
+            font-size: 10px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+            pointer-events: auto;
+            border: 1px solid #394654;
+            transition: background-color 0.1s ease, color 0.1s ease, border-color 0.1s ease !important;
+            box-sizing: border-box;
+            padding: 0;
+            margin: 0;
+            line-height: 1;
+        }
+        body.light-theme .hover-delete-btn {
+            background: #ffffff;
+            border-color: #cbd5e1;
+        }
+        .hover-delete-btn:hover {
+            background: #ef4444;
+            color: white;
+            border-color: #ef4444;
+        }
+        .chart-container.hovering-line,
+        .chart-container.hovering-line * {
+            cursor: ns-resize !important;
+        }
+
         .settings-modal-overlay {
             position: fixed;
             top: 0; left: 0; right: 0; bottom: 0;
@@ -1841,6 +2316,10 @@ function injectThemeStyles() {
             background: #10b981;
             color: white;
         }
+        #line-cancel-btn { background: #394654; color: white; }
+        body.light-theme #line-cancel-btn { background: #e2e8f0; color: #0f172a; }
+        #line-save-btn { background: #10b981; color: white; }
+        #line-delete-btn { background: #ef4444; color: white; margin-right: auto; }
         .settings-btn {
             background: transparent;
             border: none;
@@ -1868,7 +2347,8 @@ function injectThemeStyles() {
             grid-template-columns: 78% calc(22% - 12px);
             gap: 12px;
             /* Lock grid height to screen view to prevent panel from stretching it */
-            height: calc(100vh - 140px) !important;
+            height: calc(100vh - 105px) !important;
+            height: calc(100vh - 118px) !important;
         }
         /* Force children to respect grid height so overflow scrolling kicks in */
         .charts-grid.layout-1.with-info-panel > * {
@@ -2043,6 +2523,15 @@ function toggleTheme() {
     const themeOptions = getChartThemeOptions(isLight);
     Object.values(state.charts).forEach(chartData => {
         if (chartData.chart) chartData.chart.applyOptions(themeOptions);
+        if (chartData.renderedDrawings) {
+            const lineColor = isLight ? '#3b82f6' : '#60a5fa';
+            Object.values(chartData.renderedDrawings).forEach(pl => {
+                if (pl && pl.applyOptions) {
+                    pl.applyOptions({ color: lineColor });
+                }
+            });
+        }
+        restoreDrawings(chartData);
     });
 }
 
@@ -2060,8 +2549,9 @@ function getChartThemeOptions(isLight) {
         timeScale: { borderColor: isLight ? "#cbd5e1" : "#394654" },
         rightPriceScale: { borderColor: isLight ? "#cbd5e1" : "#394654" },
         crosshair: {
-            horzLine: { color: isLight ? "#64748b" : "#8b9bb0", style: 2, labelBackgroundColor: isLight ? "#334155" : "#151b23" },
-            vertLine: { color: isLight ? "#64748b" : "#8b9bb0", style: 2, labelBackgroundColor: isLight ? "#334155" : "#151b23" }
+            mode: 0, // CrosshairMode.Normal - free moving crosshair instead of magnet snapping
+            horzLine: { color: isLight ? "#64748b" : "#8b9bb0", style: 1, labelBackgroundColor: isLight ? "#334155" : "#151b23" },
+            vertLine: { color: isLight ? "#64748b" : "#8b9bb0", style: 1, labelBackgroundColor: isLight ? "#334155" : "#151b23" }
         }
     };
 }

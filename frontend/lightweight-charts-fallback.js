@@ -9,6 +9,7 @@ if (!window.LightweightCharts) {
             constructor(container, options = {}) {
                 this.container = container;
                 this.options = options;
+                this._clickHandlers = [];
                 this.width = Math.max(container.clientWidth || 800, 240);
                 this.height = Math.max(container.clientHeight || 360, 220);
                 this.series = [];
@@ -35,6 +36,15 @@ if (!window.LightweightCharts) {
                     e.preventDefault();
                 }, { passive: false });
 
+                this.container.addEventListener('click', (e) => {
+                    const rect = this.svg.getBoundingClientRect();
+                    const point = {
+                        x: e.clientX - rect.left,
+                        y: e.clientY - rect.top
+                    };
+                    this._clickHandlers.forEach(h => h({ point }));
+                });
+
                 this.resizeObserver = new ResizeObserver(() => {
                     this.width = Math.max(container.clientWidth || 800, 240);
                     this.height = Math.max(container.clientHeight || 360, 220);
@@ -44,6 +54,14 @@ if (!window.LightweightCharts) {
                     this._redraw();
                 });
                 this.resizeObserver.observe(container);
+            }
+
+            subscribeClick(handler) {
+                this._clickHandlers.push(handler);
+            }
+
+            unsubscribeClick(handler) {
+                this._clickHandlers = this._clickHandlers.filter(h => h !== handler);
             }
 
             applyOptions(options) {
@@ -147,6 +165,30 @@ if (!window.LightweightCharts) {
                 return this.scaleY ? this.scaleY(price) : null;
             }
 
+            coordinateToPrice(y) {
+                if (!this.scaleY || !this.plot) return null;
+                const top = this.plot.top;
+                const candlePlotHeight = Math.max(this.chart.height - this.plot.top - this.plot.bottom, 120) * 0.75;
+                if (!this.minPrice || !this.maxPrice) return null;
+                const price = this.maxPrice - ((y - top) / candlePlotHeight) * (this.maxPrice - this.minPrice);
+                return price;
+            }
+
+            createPriceLine(options) {
+                const pl = { options, applyOptions: (newOpts) => Object.assign(options, newOpts) };
+                if (!this.priceLines) this.priceLines = [];
+                this.priceLines.push(pl);
+                this._draw();
+                return pl;
+            }
+
+            removePriceLine(pl) {
+                if (this.priceLines) {
+                    this.priceLines = this.priceLines.filter(p => p !== pl);
+                    this._draw();
+                }
+            }
+
             setData(data) {
                 this.candles = Array.isArray(data) ? data.slice() : [];
                 this._draw();
@@ -196,6 +238,8 @@ if (!window.LightweightCharts) {
                 const candlePlotHeight = plotHeight * 0.75;
                 const scaleY = price => plot.top + ((maxPrice - price) / (maxPrice - minPrice)) * candlePlotHeight;
                 this.scaleY = scaleY; // Store for priceToCoordinate calculations
+                this.minPrice = minPrice;
+                this.maxPrice = maxPrice;
                 
                 const volumeScaleY = vol => plot.top + plotHeight - (vol / (maxVolume || 1)) * (plotHeight * 0.25);
 
@@ -244,6 +288,32 @@ if (!window.LightweightCharts) {
 
                 this._drawPriceAxis(plot, plotHeight, minPrice, maxPrice, scaleY);
                 this._drawTimeAxis(plot, plotWidth, visible, slot);
+
+                if (this.priceLines && this.priceLines.length > 0) {
+                    this.priceLines.forEach(pl => {
+                        const y = scaleY(pl.options.price);
+                        const plLine = document.createElementNS(SVG_NS, "line");
+                        plLine.setAttribute("x1", plot.left);
+                        plLine.setAttribute("y1", y);
+                        plLine.setAttribute("x2", this.chart.width);
+                        plLine.setAttribute("y2", y);
+                        plLine.setAttribute("stroke", pl.options.color || "#3b82f6");
+                        plLine.setAttribute("stroke-width", pl.options.lineWidth || 2);
+                        if (pl.options.lineStyle === 2) plLine.setAttribute("stroke-dasharray", "4,4");
+                        this.group.appendChild(plLine);
+                        
+                        if (pl.options.axisLabelVisible) {
+                            const text = document.createElementNS(SVG_NS, "text");
+                            text.setAttribute("x", this.chart.width - 6);
+                            text.setAttribute("y", y + 4);
+                            text.setAttribute("fill", pl.options.color || "#ffffff");
+                            text.setAttribute("font-size", "10");
+                            text.setAttribute("text-anchor", "end");
+                            text.textContent = pl.options.title || formatAxisPrice(pl.options.price);
+                            this.chart.axisGroup.appendChild(text);
+                        }
+                    });
+                }
 
                 // Draw live price marker, dotted line, and box overlay
                 const lastCandle = visible[visible.length - 1];
