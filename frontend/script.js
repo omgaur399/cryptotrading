@@ -1,5 +1,5 @@
 const CONFIG = {
-    API_BASE: window.location.protocol === 'file:' ? "http://127.0.0.1:5000/api" : "/api",
+    API_BASE: (window.location.protocol === 'file:' || ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== '5000')) ? "http://127.0.0.1:5000/api" : "/api",
     STORAGE_KEY: "trading-dashboard-chart-count",
     LAYOUT_STORAGE_KEY: "trading-dashboard-layout",
     THEME_STORAGE_KEY: "trading-dashboard-theme",
@@ -102,9 +102,24 @@ const state = {
     hlPingInterval: null,
     connected: false,
     theme: "dark",
+    isSyncingCrosshair: false,
+    obCentered: false,
 };
 
 document.addEventListener("DOMContentLoaded", initializeApp);
+
+async function loadPaperTradingScripts() {
+    const scripts = ['paper-account.js', 'paper-positions.js', 'paper-history.js', 'paper-trading.js'];
+    for (const s of scripts) {
+        await new Promise((resolve) => {
+            const script = document.createElement('script');
+            script.src = s;
+            script.onload = resolve;
+            script.onerror = () => { console.warn(`Failed to load ${s}`); resolve(); };
+            document.head.appendChild(script);
+        });
+    }
+}
 
 async function initializeApp() {
     // Inject a blank favicon to prevent 404 errors
@@ -127,6 +142,12 @@ async function initializeApp() {
     }
 
     state.chartCount = readSavedChartCount();
+    
+    await loadPaperTradingScripts();
+    if (window.PaperTrading) {
+        window.paperTrading = new window.PaperTrading();
+    }
+    
     document.getElementById("chart-count").value = String(state.chartCount);
     document.getElementById("chart-count").addEventListener("change", event => {
         setChartCount(Number(event.target.value));
@@ -304,6 +325,7 @@ function connectLiveStream() {
             
             Object.values(state.charts).forEach(chartData => {
                 chartData.liveSubscribed = false; // Force resubscribe
+                chartData.l2Subscribed = false;
                 if (chartData.source === 'hyperliquid' && chartData.symbol !== 'none') {
                     subscribeChart(chartData);
                 }
@@ -333,6 +355,11 @@ function connectLiveStream() {
                         volume: parseFloat(trade.sz)
                     });
                 });
+            } else if (data.channel === 'l2Book' && data.data) {
+                renderOrderBook(data.data);
+                if (state.chartCount === 1 && state.charts['chart-1'] && state.charts['chart-1'].symbol === data.data.coin) {
+                    renderOrderBook(data.data);
+                }
             }
         };
     }
@@ -347,6 +374,7 @@ function setChartCount(count) {
 
 function renderGrid() {
     const grid = document.getElementById("charts-grid");
+    grid.className = `charts-grid layout-${state.chartCount}`;
     grid.className = `charts-grid layout-${state.chartCount}${state.chartCount === 1 ? ' with-info-panel' : ''}`;
     grid.innerHTML = "";
 
@@ -427,6 +455,7 @@ function renderGrid() {
             lastPrice: null,
             referencePrice: null,
             liveSubscribed: false,
+            l2Subscribed: false,
             lastDirection: 'up',
             indicators: targetIndicators,
             pendingUpdate: false,
@@ -441,11 +470,21 @@ function renderGrid() {
         loadChartData(chartData);
     }
 
+    const nextActive = state.charts[state.activeChartId] ? state.activeChartId : 'chart-1';
+    setActiveChart(nextActive);
     if (state.chartCount === 1) {
+        state.obCentered = false;
         grid.appendChild(createInfoPanel());
+            
+            if (window.paperTrading) {
+                const tradePanel = document.getElementById('paper-trade-panel');
+                if (tradePanel) window.paperTrading.buildUI(tradePanel);
+            }
+            
         const chartData = state.charts['chart-1'];
         if (chartData && chartData.symbol !== 'none' && chartData.symbol !== 'No Chart') {
             fetchAndRenderAssetInfo(chartData.symbol);
+            updateOrderBookHeader(chartData.symbol);
         }
     }
 
@@ -567,15 +606,6 @@ function populatePaneControls(chartData) {
     input.addEventListener("click", () => {
         if (dropdown.classList.contains("show")) {
             input.select();
-        }
-    });
-
-    symbolContainer.addEventListener("mousedown", (e) => {
-        if (dropdown.contains(e.target)) return; // Let dropdown clicks pass through naturally
-        if (e.target !== input) {
-            e.preventDefault(); // Prevent input from losing focus
-            input.focus();
-            openDropdown();
         }
     });
 
@@ -784,8 +814,10 @@ function initializeChart(chartData) {
         // Enable all native user interactions. These are defaults but are made explicit here.
         handleScroll: {
             mouseWheel: false, // Must be false! If true, it overrides zooming and pans instead.
+            pressedMouseMove: { time: true, price: true }, // Allow panning in both directions
             pressedMouseMove: true, // Panning
             horzTouchDrag: true,
+            vertTouchDrag: true,
         },
         handleScale: {
             mouseWheel: true,
@@ -807,22 +839,31 @@ function initializeChart(chartData) {
         e.stopPropagation();
         const id = chartData.hoveredLineId;
         if (!id) return;
-        const key = `${chartData.symbol}_${chartData.interval}`;
+        const key = chartData.symbol;
         const lines = state.drawings[key];
         if (lines) {
             const idx = lines.findIndex(l => l.id === id);
             if (idx !== -1) {
                 const lineType = lines[idx].type;
-                if (lineType === 'verticalLine') {
-                    const el = document.getElementById(`vline-${id}`);
-                    if (el) el.remove();
-                } else {
-                    const pl = chartData.renderedDrawings[id];
-                    if (pl) {
-                        try { chartData.candleSeries.removePriceLine(pl); } catch(err){}
-                        delete chartData.renderedDrawings[id];
+                Object.values(state.charts).forEach(cd => {
+                    if (cd.symbol === chartData.symbol) {
+                        if (lineType === 'verticalLine') {
+                            const el = document.getElementById(`vline-${cd.id}-${id}`);
+                            if (el) el.remove();
+                        } else {
+                            const pl = cd.renderedDrawings[id];
+                            if (pl) {
+                                if (pl instanceof HTMLElement) {
+                                    pl.remove();
+                                } else {
+                                    try { cd.candleSeries.removePriceLine(pl); } catch(err){}
+                                }
+                                delete cd.renderedDrawings[id];
+                            }
+                        }
+                        updateMarkers(cd);
                     }
-                }
+                });
                 lines.splice(idx, 1);
                 saveDrawings();
             }
@@ -830,6 +871,22 @@ function initializeChart(chartData) {
         deleteBtn.style.display = 'none';
         container.classList.remove('hovering-hline');
         container.classList.remove('hovering-vline');
+    });
+
+    const addAlertBtn = document.createElement('div');
+    addAlertBtn.className = 'hover-add-alert-btn';
+    addAlertBtn.innerHTML = '＋';
+    addAlertBtn.style.display = 'none';
+    addAlertBtn.title = 'Add Alert';
+    container.appendChild(addAlertBtn);
+    chartData.hoverAddAlertBtn = addAlertBtn;
+
+    addAlertBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (chartData.lastHoveredPrice !== null) {
+            openPriceAlertModal(chartData, chartData.lastHoveredPrice);
+        }
+        addAlertBtn.style.display = 'none';
     });
 
     let isDragging = false;
@@ -843,19 +900,29 @@ function initializeChart(chartData) {
         if (!chartData.candleSeries) return;
         const clickedPrice = chartData.candleSeries.coordinateToPrice(y);
 
-        const key = `${chartData.symbol}_${chartData.interval}`;
-        const lines = state.drawings[key];
-        if (!lines) return;
+        const key = chartData.symbol;
+        const lines = state.drawings[key] || [];
 
         for (let i = 0; i < lines.length; i++) {
             const line = lines[i];
-            if (line.type === 'horizontalLine' || line.type === 'alert') {
+            if (line.type === 'horizontalLine') {
                 if (clickedPrice === null) continue;
                 const lineY = chartData.candleSeries.priceToCoordinate(line.price);
                 if (lineY !== null && Math.abs(y - lineY) < 15) {
                     isDragging = true;
                     draggingLineInfo = { line, index: i, key, startY: y };
                     // Temporarily disable panning
+                    chartData.chart.applyOptions({ handleScroll: { pressedMouseMove: false } });
+                    break;
+                }
+            } else if (line.type === 'alert') {
+                if (clickedPrice === null) continue;
+                const lineY = chartData.candleSeries.priceToCoordinate(line.price);
+                let rightScaleWidth = 55;
+                try { const w = chartData.chart.priceScale('right').width(); if (w > 10 && w < 150) rightScaleWidth = w; } catch(e) {}
+                if (lineY !== null && Math.abs(y - lineY) < 15 && x >= rect.width - rightScaleWidth - 30) {
+                    isDragging = true;
+                    draggingLineInfo = { line, index: i, key, startY: y };
                     chartData.chart.applyOptions({ handleScroll: { pressedMouseMove: false } });
                     break;
                 }
@@ -875,6 +942,34 @@ function initializeChart(chartData) {
                 }
             }
         }
+
+        if (!isDragging && window.paperTrading) {
+            const checkItem = (item, isOrder) => {
+                if (item.symbol !== chartData.symbol) return false;
+                if (!isOrder && window.paperTrading.activeTPSLIds && !window.paperTrading.activeTPSLIds.has(item.id)) return false;
+                if (item.tp !== null && item.tp !== undefined) {
+                    const lineY = chartData.candleSeries.priceToCoordinate(item.tp);
+                    if (lineY !== null && Math.abs(y - lineY) < 15) {
+                        isDragging = true;
+                        draggingLineInfo = { isPT: true, id: item.id, type: 'tp', isOrder: isOrder, startY: y };
+                        chartData.chart.applyOptions({ handleScroll: { pressedMouseMove: false } });
+                        return true;
+                    }
+                }
+                if (item.sl !== null && item.sl !== undefined) {
+                    const lineY = chartData.candleSeries.priceToCoordinate(item.sl);
+                    if (lineY !== null && Math.abs(y - lineY) < 15) {
+                        isDragging = true;
+                        draggingLineInfo = { isPT: true, id: item.id, type: 'sl', isOrder: isOrder, startY: y };
+                        chartData.chart.applyOptions({ handleScroll: { pressedMouseMove: false } });
+                        return true;
+                    }
+                }
+                return false;
+            };
+            for (let pos of window.paperTrading.positions.positions) if (checkItem(pos, false)) break;
+            if (!isDragging) for (let order of window.paperTrading.positions.orders) if (checkItem(order, true)) break;
+        }
     }, { capture: true });
 
     container.addEventListener('mousemove', (e) => {
@@ -884,6 +979,33 @@ function initializeChart(chartData) {
 
         // Handle dragging updates
         if (isDragging && draggingLineInfo) {
+            if (draggingLineInfo.isPT) {
+                if (Math.abs(y - draggingLineInfo.startY) > 3) chartData.justDragged = true;
+                const newPrice = chartData.candleSeries.coordinateToPrice(y);
+                if (newPrice !== null && window.paperTrading) {
+                    const collection = draggingLineInfo.isOrder ? window.paperTrading.positions.orders : window.paperTrading.positions.positions;
+                    const item = collection.find(i => i.id === draggingLineInfo.id);
+                    if (item) {
+                        if (draggingLineInfo.type === 'tp') item.tp = newPrice;
+                        if (draggingLineInfo.type === 'sl') item.sl = newPrice;
+                        
+                        Object.values(state.charts).forEach(cd => {
+                            if (cd.symbol === chartData.symbol && cd.ptLineObjects) {
+                                const pl = cd.ptLineObjects[`${item.id}_${draggingLineInfo.type}`];
+                                if (pl && pl.applyOptions) pl.applyOptions({ price: newPrice });
+                            }
+                        });
+                        
+                        const tpInput = document.getElementById(`pt-edit-tp-${item.id}`);
+                        const slInput = document.getElementById(`pt-edit-sl-${item.id}`);
+                        const fmt = (p) => p < 1 ? p.toFixed(4) : p.toFixed(2);
+                        if (draggingLineInfo.type === 'tp' && tpInput) tpInput.value = fmt(newPrice);
+                        if (draggingLineInfo.type === 'sl' && slInput) slInput.value = fmt(newPrice);
+                    }
+                }
+                chartData.hoverDeleteBtn.style.display = 'none';
+                return;
+            }
             if (draggingLineInfo.line.type === 'horizontalLine' || draggingLineInfo.line.type === 'alert') {
                 if (Math.abs(y - draggingLineInfo.startY) > 3) {
                     chartData.justDragged = true;
@@ -891,15 +1013,24 @@ function initializeChart(chartData) {
                 const newPrice = chartData.candleSeries.coordinateToPrice(y);
                 if (newPrice !== null) {
                     draggingLineInfo.line.price = newPrice;
-                    const pl = chartData.renderedDrawings[draggingLineInfo.line.id];
-                    if (pl && pl.applyOptions) {
-                        if (draggingLineInfo.line.type === 'alert') {
-                            draggingLineInfo.line.active = true; // Reactivate triggered alerts on drag
-                            pl.applyOptions({ price: newPrice, color: '#f59e0b', title: '🔔' });
-                        } else {
-                            pl.applyOptions({ price: newPrice });
+                    Object.values(state.charts).forEach(cd => {
+                        if (cd.symbol === chartData.symbol) {
+                            const pl = cd.renderedDrawings[draggingLineInfo.line.id];
+                            if (pl) {
+                                if (pl instanceof HTMLElement) {
+                                    if (draggingLineInfo.line.type === 'alert') draggingLineInfo.line.active = true;
+                                    if (pl._updatePosition) pl._updatePosition();
+                                } else if (pl.applyOptions) {
+                                    if (draggingLineInfo.line.type === 'alert') {
+                                        draggingLineInfo.line.active = true;
+                                        pl.applyOptions({ price: newPrice, color: 'rgba(0, 0, 0, 0)', title: '🔔' });
+                                    } else {
+                                        pl.applyOptions({ price: newPrice });
+                                    }
+                                }
+                            }
                         }
-                    }
+                    });
                 }
             } else if (draggingLineInfo.line.type === 'verticalLine') {
                 if (Math.abs(x - draggingLineInfo.startX) > 3) {
@@ -914,10 +1045,13 @@ function initializeChart(chartData) {
                             const newTime = timeScale.coordinateToTime(x);
                             if (newTime !== null) draggingLineInfo.line.time = newTime;
                         }
-                        renderVerticalLine(chartData, draggingLineInfo.line);
+                        Object.values(state.charts).forEach(cd => {
+                            if (cd.symbol === chartData.symbol) renderVerticalLine(cd, draggingLineInfo.line);
+                        });
                     }
                 }
             }
+            if (chartData.hoverAddAlertBtn) chartData.hoverAddAlertBtn.style.display = 'none';
             chartData.hoverDeleteBtn.style.display = 'none';
             return;
         }
@@ -925,6 +1059,7 @@ function initializeChart(chartData) {
         // Handle hover displays
         if (!chartData.candleSeries || chartData.drawingMode === 'hline' || chartData.drawingMode === 'vline') {
             chartData.hoverDeleteBtn.style.display = 'none';
+            if (chartData.hoverAddAlertBtn) chartData.hoverAddAlertBtn.style.display = 'none';
             container.classList.remove('hovering-hline');
             container.classList.remove('hovering-vline');
             return;
@@ -934,15 +1069,27 @@ function initializeChart(chartData) {
         let hoveredLine = null;
         let hoveredLineY = null;
         let hoveredLineX = null;
+        let hoveredIsPT = false;
 
-        const key = `${chartData.symbol}_${chartData.interval}`;
+        const key = chartData.symbol;
         const lines = state.drawings[key];
         if (lines) {
             for (let line of lines) {
-                if (line.type === 'horizontalLine' || line.type === 'alert') {
+                if (line.type === 'horizontalLine') {
                     if (hoverPrice !== null) {
                         const lineY = chartData.candleSeries.priceToCoordinate(line.price);
                         if (lineY !== null && Math.abs(y - lineY) < 15) {
+                            hoveredLine = line;
+                            hoveredLineY = lineY;
+                            break;
+                        }
+                    }
+                } else if (line.type === 'alert') {
+                    if (hoverPrice !== null) {
+                        const lineY = chartData.candleSeries.priceToCoordinate(line.price);
+                        let rightScaleWidth = 55;
+                        try { const w = chartData.chart.priceScale('right').width(); if (w > 10 && w < 150) rightScaleWidth = w; } catch(e) {}
+                        if (lineY !== null && Math.abs(y - lineY) < 15 && x >= rect.width - rightScaleWidth - 30) {
                             hoveredLine = line;
                             hoveredLineY = lineY;
                             break;
@@ -966,13 +1113,53 @@ function initializeChart(chartData) {
             }
         }
 
+        if (!hoveredLine && window.paperTrading && hoverPrice !== null) {
+            const checkPTHover = (item, isOrder) => {
+                if (item.symbol !== chartData.symbol) return false;
+                if (!isOrder && window.paperTrading.activeTPSLIds && !window.paperTrading.activeTPSLIds.has(item.id)) return false;
+                if (item.tp !== null && item.tp !== undefined) {
+                    const lineY = chartData.candleSeries.priceToCoordinate(item.tp);
+                    if (lineY !== null && Math.abs(y - lineY) < 15) {
+                        hoveredLine = { id: item.id, type: 'tp' };
+                        hoveredLineY = lineY;
+                        hoveredIsPT = true;
+                        return true;
+                    }
+                }
+                if (item.sl !== null && item.sl !== undefined) {
+                    const lineY = chartData.candleSeries.priceToCoordinate(item.sl);
+                    if (lineY !== null && Math.abs(y - lineY) < 15) {
+                        hoveredLine = { id: item.id, type: 'sl' };
+                        hoveredLineY = lineY;
+                        hoveredIsPT = true;
+                        return true;
+                    }
+                }
+                return false;
+            };
+            for (let pos of window.paperTrading.positions.positions) if (checkPTHover(pos, false)) break;
+            if (!hoveredLine) for (let order of window.paperTrading.positions.orders) if (checkPTHover(order, true)) break;
+        }
+
         if (hoveredLine) {
-            if (hoveredLine.type === 'horizontalLine' || hoveredLine.type === 'alert') {
+            if (hoveredIsPT) {
+                container.classList.add('hovering-hline');
+                container.classList.remove('hovering-vline');
+                chartData.hoverDeleteBtn.style.display = 'none';
+                chartData.hoveredLineId = null;
+            } else if (hoveredLine.type === 'horizontalLine') {
                 let currentLeft = parseFloat(chartData.hoverDeleteBtn.style.left) || 0;
                 if (chartData.hoveredLineId !== hoveredLine.id || Math.abs(x - currentLeft) > 50) {
                     const safeX = Math.min(x + 15, rect.width - 50); // Keep it away from the right-side price scale
                     chartData.hoverDeleteBtn.style.left = `${safeX}px`;
                 }
+                chartData.hoverDeleteBtn.style.top = `${hoveredLineY - 9}px`;
+                container.classList.add('hovering-hline');
+                container.classList.remove('hovering-vline');
+            } else if (hoveredLine.type === 'alert') {
+                let rightScaleWidth = 55;
+                try { const w = chartData.chart.priceScale('right').width(); if (w > 10 && w < 150) rightScaleWidth = w; } catch(e) {}
+                chartData.hoverDeleteBtn.style.left = `${rect.width - rightScaleWidth - 25}px`;
                 chartData.hoverDeleteBtn.style.top = `${hoveredLineY - 9}px`;
                 container.classList.add('hovering-hline');
                 container.classList.remove('hovering-vline');
@@ -989,22 +1176,72 @@ function initializeChart(chartData) {
 
             chartData.hoverDeleteBtn.style.display = 'flex';
             chartData.hoveredLineId = hoveredLine.id;
+            if (chartData.hoverAddAlertBtn) chartData.hoverAddAlertBtn.style.display = 'none';
         } else {
             chartData.hoverDeleteBtn.style.display = 'none';
             chartData.hoveredLineId = null;
             container.classList.remove('hovering-hline');
             container.classList.remove('hovering-vline');
+            
+            if (hoverPrice !== null && !isDragging) {
+                chartData.lastHoveredPrice = hoverPrice;
+                let rightScaleWidth = 55;
+                try { const w = chartData.chart.priceScale('right').width(); if (w > 10 && w < 150) rightScaleWidth = w; } catch(e) {}
+                // Position it perfectly to the left of the right price scale
+                const safeX = rect.width - rightScaleWidth - 22; 
+                if (chartData.hoverAddAlertBtn) {
+                    chartData.hoverAddAlertBtn.style.left = `${safeX}px`;
+                    chartData.hoverAddAlertBtn.style.top = `${y - 9}px`;
+                    chartData.hoverAddAlertBtn.style.display = 'flex';
+                }
+            } else {
+                if (chartData.hoverAddAlertBtn) chartData.hoverAddAlertBtn.style.display = 'none';
+            }
         }
     });
 
-    const finishDrag = () => {
+    const finishDrag = (e) => {
         if (isDragging) {
             isDragging = false;
-            saveDrawings();
+            if (draggingLineInfo && draggingLineInfo.isPT && window.paperTrading) {
+                window.paperTrading.positions.save();
+                window.paperTrading.renderPositions();
+            } else {
+                saveDrawings();
+            }
             // Re-enable panning
+            chartData.chart.applyOptions({ handleScroll: { pressedMouseMove: { time: true, price: true } } });
             chartData.chart.applyOptions({ handleScroll: { pressedMouseMove: true } });
             if (chartData.justDragged) {
                 setTimeout(() => chartData.justDragged = false, 50);
+            }
+        } else if (e && e.clientX !== undefined) {
+            // Handle clicks strictly on the right side price scale (e.g., for Alerts)
+            const rect = container.getBoundingClientRect();
+            const x = e.clientX - rect.left;
+            const y = e.clientY - rect.top;
+            let rightScaleWidth = 55;
+            try { const w = chartData.chart.priceScale('right').width(); if (w > 10 && w < 150) rightScaleWidth = w; } catch(err) {}
+            
+            if (x >= rect.width - rightScaleWidth - 30) {
+                if (chartData.candleSeries) {
+                    const clickedPrice = chartData.candleSeries.coordinateToPrice(y);
+                    if (clickedPrice !== null) {
+                        const key = chartData.symbol;
+                        const lines = state.drawings[key];
+                        if (lines) {
+                            for (let line of lines) {
+                                if (line.type === 'alert') {
+                                    const lineY = chartData.candleSeries.priceToCoordinate(line.price);
+                                    if (lineY !== null && Math.abs(y - lineY) < 15) {
+                                        openAlertSettingsModal(chartData, line, key);
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     };
@@ -1013,6 +1250,7 @@ function initializeChart(chartData) {
     container.addEventListener('mouseleave', () => {
         finishDrag();
         chartData.hoverDeleteBtn.style.display = 'none';
+        if (chartData.hoverAddAlertBtn) chartData.hoverAddAlertBtn.style.display = 'none';
         container.classList.remove('hovering-hline');
         container.classList.remove('hovering-vline');
     });
@@ -1023,10 +1261,10 @@ function initializeChart(chartData) {
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
 
-        let rightScaleWidth = 0;
-        try { rightScaleWidth = chartData.chart.priceScale('right').width(); } catch(err) {}
+        let rightScaleWidth = 55;
+        try { const w = chartData.chart.priceScale('right').width(); if (w > 10 && w < 150) rightScaleWidth = w; } catch(err) {}
 
-        if (rightScaleWidth > 0 && x >= rect.width - rightScaleWidth) {
+        if (x >= rect.width - rightScaleWidth) {
             const price = chartData.candleSeries.coordinateToPrice(y);
             if (price !== null) {
                 openPriceAlertModal(chartData, price);
@@ -1044,25 +1282,29 @@ function initializeChart(chartData) {
             const time = param.time;
             const logical = chartData.chart.timeScale().coordinateToLogical ? chartData.chart.timeScale().coordinateToLogical(param.point.x) : null;
             const id = Date.now().toString() + Math.random().toString().slice(2, 6);
-            const key = `${chartData.symbol}_${chartData.interval}`;
+            const key = chartData.symbol;
             if (!state.drawings[key]) state.drawings[key] = [];
 
             if (chartData.drawingMode === "hline") {
                 if (price !== null) addHorizontalLine(chartData, price);
             } else if (chartData.drawingMode === "vline") {
                 if (logical !== null || time !== undefined) {
-                    const lineObj = { type: 'verticalLine', symbol: chartData.symbol, timeframe: chartData.interval, time: time, logical: logical, id: id };
+                    const lineObj = { type: 'verticalLine', symbol: chartData.symbol, time: time, logical: logical, id: id, color: state.theme === 'light' ? '#3b82f6' : '#60a5fa', lineWidth: 2 };
                     state.drawings[key].push(lineObj);
                     saveDrawings();
-                    renderVerticalLine(chartData, lineObj);
+                    Object.values(state.charts).forEach(cd => {
+                        if (cd.symbol === chartData.symbol) renderVerticalLine(cd, lineObj);
+                    });
                 }
             } else if (chartData.drawingMode === "buyMarker" || chartData.drawingMode === "sellMarker") {
                 if (time) {
                     state.drawings[key].push({
-                        type: chartData.drawingMode, symbol: chartData.symbol, timeframe: chartData.interval, time: time, price: price, id: id
+                        type: chartData.drawingMode, symbol: chartData.symbol, time: time, price: price, id: id
                     });
                     saveDrawings();
-                    updateMarkers(chartData);
+                    Object.values(state.charts).forEach(cd => {
+                        if (cd.symbol === chartData.symbol) updateMarkers(cd);
+                    });
                 }
             } else if (chartData.drawingMode === "priceAlert") {
                 if (price !== null) {
@@ -1084,6 +1326,21 @@ function initializeChart(chartData) {
         }
         checkAndInteractWithLine(chartData, clickedPrice, param.time, param.point);
     });
+
+    if (typeof chartData.chart.subscribeCrosshairMove === "function") {
+        chartData.chart.subscribeCrosshairMove((param) => {
+            if (state.isSyncingCrosshair) return;
+            
+            state.isSyncingCrosshair = true;
+            try {
+                handleCrosshairSync(chartData, param);
+            } catch (err) {
+                console.warn("Crosshair sync error:", err);
+            } finally {
+                state.isSyncingCrosshair = false;
+            }
+        });
+    }
 
     chartData.candleSeries = chartData.chart.addCandlestickSeries({
             upColor: "#16a34a", downColor: "#dc2626",
@@ -1173,6 +1430,7 @@ function resetChart(chartData) {
     chartData.referencePrice = null;
     chartData.liveSubscribed = false;
     chartData.cachedData = [];
+    chartData.isSyncedCrosshairActive = false;
     if (chartData.candleSeries) chartData.candleSeries.setData([]);
     if (chartData.volumeSeries) chartData.volumeSeries.setData([]);
     if (chartData.smaSeries) chartData.smaSeries.setData([]);
@@ -1188,9 +1446,13 @@ function resetChart(chartData) {
 
     if (chartData.renderedDrawings && chartData.candleSeries) {
         Object.values(chartData.renderedDrawings).forEach(pl => {
-            try {
-                chartData.candleSeries.removePriceLine(pl);
-            } catch(e) {}
+            if (pl instanceof HTMLElement) {
+                pl.remove();
+            } else {
+                try {
+                    chartData.candleSeries.removePriceLine(pl);
+                } catch(e) {}
+            }
         });
         chartData.renderedDrawings = {};
     }
@@ -1205,7 +1467,7 @@ function saveDrawings() {
 }
 
 function addHorizontalLine(chartData, price) {
-    const key = `${chartData.symbol}_${chartData.interval}`;
+    const key = chartData.symbol;
     if (!state.drawings[key]) state.drawings[key] = [];
     
     const isLight = state.theme === 'light';
@@ -1213,7 +1475,6 @@ function addHorizontalLine(chartData, price) {
     const lineObj = {
         type: "horizontalLine",
         symbol: chartData.symbol,
-        timeframe: chartData.interval,
         price: price,
         id: id,
         color: isLight ? '#3b82f6' : '#60a5fa',
@@ -1221,7 +1482,9 @@ function addHorizontalLine(chartData, price) {
     };
     state.drawings[key].push(lineObj);
     saveDrawings();
-    renderHorizontalLine(chartData, lineObj);
+    Object.values(state.charts).forEach(cd => {
+        if (cd.symbol === chartData.symbol) renderHorizontalLine(cd, lineObj);
+    });
 }
 
 function renderHorizontalLine(chartData, lineObj) {
@@ -1244,7 +1507,7 @@ function renderHorizontalLine(chartData, lineObj) {
 }
 
 function checkAndInteractWithLine(chartData, clickedPrice, clickedTime, point) {
-    const key = `${chartData.symbol}_${chartData.interval}`;
+    const key = chartData.symbol;
     if (!state.drawings[key]) return;
     
     const lines = state.drawings[key];
@@ -1260,14 +1523,7 @@ function checkAndInteractWithLine(chartData, clickedPrice, clickedTime, point) {
                 }
             }
         } else if (line.type === "alert") {
-            if (chartData.candleSeries && clickedPrice !== null) {
-                const clickedY = chartData.candleSeries.priceToCoordinate(clickedPrice);
-                const lineY = chartData.candleSeries.priceToCoordinate(line.price);
-                    if (clickedY !== null && lineY !== null && Math.abs(clickedY - lineY) < 15) {
-                    openAlertSettingsModal(chartData, line, key);
-                    return;
-                }
-            }
+            // Alerts are now exclusively handled by mouseup directly on the right scale
         } else if ((line.type === "buyMarker" || line.type === "sellMarker") && clickedTime === line.time) {
             openMarkerSettingsModal(chartData, line, key);
             return;
@@ -1338,13 +1594,19 @@ function openLineSettingsModal(chartData, lineObj, key) {
     };
 
     document.getElementById("line-delete-btn").onclick = () => {
-        const priceLine = chartData.renderedDrawings?.[lineObj.id];
-        if (priceLine) {
-            try {
-                chartData.candleSeries.removePriceLine(priceLine);
-            } catch (e) {}
-            delete chartData.renderedDrawings[lineObj.id];
-        }
+        Object.values(state.charts).forEach(cd => {
+            if (cd.symbol === chartData.symbol) {
+                const priceLine = cd.renderedDrawings?.[lineObj.id];
+                if (priceLine) {
+                    if (priceLine instanceof HTMLElement) {
+                        priceLine.remove();
+                    } else {
+                        try { cd.candleSeries.removePriceLine(priceLine); } catch (e) {}
+                    }
+                    delete cd.renderedDrawings[lineObj.id];
+                }
+            }
+        });
         const idx = state.drawings[key].findIndex(l => l.id === lineObj.id);
         if (idx !== -1) state.drawings[key].splice(idx, 1);
         saveDrawings();
@@ -1360,14 +1622,18 @@ function openLineSettingsModal(chartData, lineObj, key) {
         lineObj.color = newColor;
         lineObj.lineWidth = newWidth;
         
-        const priceLine = chartData.renderedDrawings?.[lineObj.id];
-        if (priceLine && priceLine.applyOptions) {
-            priceLine.applyOptions({
-                price: lineObj.price,
-                color: lineObj.color,
-                lineWidth: lineObj.lineWidth
-            });
-        }
+        Object.values(state.charts).forEach(cd => {
+            if (cd.symbol === chartData.symbol) {
+                const priceLine = cd.renderedDrawings?.[lineObj.id];
+                if (priceLine && priceLine.applyOptions) {
+                    priceLine.applyOptions({
+                        price: lineObj.price,
+                        color: lineObj.color,
+                        lineWidth: lineObj.lineWidth
+                    });
+                }
+            }
+        });
         
         saveDrawings();
         modal.style.display = "none";
@@ -1378,16 +1644,20 @@ function restoreDrawings(chartData) {
     if (chartData.renderedDrawings && chartData.candleSeries) {
         Object.values(chartData.renderedDrawings).forEach(pl => {
             if (pl) {
-                try {
-                    chartData.candleSeries.removePriceLine(pl);
-                } catch(e) {}
+                if (pl instanceof HTMLElement) {
+                    pl.remove();
+                } else {
+                    try {
+                        chartData.candleSeries.removePriceLine(pl);
+                    } catch(e) {}
+                }
             }
         });
     }
     chartData.renderedDrawings = {};
     cleanupVerticalLines(chartData);
     
-    const key = `${chartData.symbol}_${chartData.interval}`;
+    const key = chartData.symbol;
     const lines = state.drawings[key];
     if (lines) {
         lines.forEach(lineObj => {
@@ -1429,10 +1699,10 @@ function renderVerticalLine(chartData, lineObj) {
     const container = document.getElementById(`${chartData.id}-container`);
     if (!container || !chartData.chart) return;
     
-    let el = document.getElementById(`vline-${lineObj.id}`);
+    let el = document.getElementById(`vline-${chartData.id}-${lineObj.id}`);
     if (!el) {
         el = document.createElement('div');
-        el.id = `vline-${lineObj.id}`;
+        el.id = `vline-${chartData.id}-${lineObj.id}`;
         el.className = 'vertical-line-drawing';
         el.style.position = 'absolute';
         el.style.top = '0px';
@@ -1452,7 +1722,7 @@ function renderVerticalLine(chartData, lineObj) {
         container.appendChild(el);
 
         const updatePosition = () => {
-            if (!chartData.chart || !document.getElementById(`vline-${lineObj.id}`)) return;
+            if (!chartData.chart || !document.getElementById(`vline-${chartData.id}-${lineObj.id}`)) return;
             const timeScale = chartData.chart.timeScale();
             
             let x = null;
@@ -1462,8 +1732,8 @@ function renderVerticalLine(chartData, lineObj) {
                 x = timeScale.timeToCoordinate(lineObj.time);
             }
             
-            let rightScaleWidth = 0;
-            try { rightScaleWidth = chartData.chart.priceScale('right').width(); } catch(e) {}
+            let rightScaleWidth = 55;
+            try { const w = chartData.chart.priceScale('right').width(); if (w > 10 && w < 150) rightScaleWidth = w; } catch(e) {}
             
             if (x !== null && x >= 0 && x <= (container.clientWidth - rightScaleWidth)) {
                 el.style.left = `${x}px`;
@@ -1502,7 +1772,7 @@ function openVLineSettingsModal(chartData, lineObj) {
         document.body.appendChild(modal);
     }
 
-    const key = `${chartData.symbol}_${chartData.interval}`;
+    const key = chartData.symbol;
     const isLight = state.theme === 'light';
     const defaultColor = isLight ? '#3b82f6' : '#60a5fa';
     const color = lineObj.color || defaultColor;
@@ -1539,8 +1809,12 @@ function openVLineSettingsModal(chartData, lineObj) {
     };
 
     document.getElementById("vline-delete-btn").onclick = () => {
-        const el = document.getElementById(`vline-${lineObj.id}`);
-        if (el) el.remove();
+        Object.values(state.charts).forEach(cd => {
+            if (cd.symbol === chartData.symbol) {
+                const el = document.getElementById(`vline-${cd.id}-${lineObj.id}`);
+                if (el) el.remove();
+            }
+        });
         if (state.drawings[key]) {
             state.drawings[key] = state.drawings[key].filter(d => d.id !== lineObj.id);
             saveDrawings();
@@ -1555,7 +1829,9 @@ function openVLineSettingsModal(chartData, lineObj) {
         lineObj.color = newColor;
         lineObj.lineWidth = newWidth;
         
-        renderVerticalLine(chartData, lineObj);
+        Object.values(state.charts).forEach(cd => {
+            if (cd.symbol === chartData.symbol) renderVerticalLine(cd, lineObj);
+        });
         
         saveDrawings();
         modal.style.display = "none";
@@ -1595,18 +1871,24 @@ function openMarkerSettingsModal(chartData, markerObj, key) {
             const idx = lines.findIndex(d => d.id === markerObj.id);
             if (idx !== -1) lines.splice(idx, 1);
             saveDrawings();
-            updateMarkers(chartData);
+            Object.values(state.charts).forEach(cd => {
+                if (cd.symbol === chartData.symbol) updateMarkers(cd);
+            });
         }
         modal.style.display = "none";
     };
 }
 
+window.refreshChartMarkers = () => {
+    Object.values(state.charts).forEach(cd => updateMarkers(cd));
+};
+
 function updateMarkers(chartData) {
     if (!chartData.candleSeries) return;
-    const key = `${chartData.symbol}_${chartData.interval}`;
+    const key = chartData.symbol;
     const drawings = state.drawings[key] || [];
     
-    const markers = [];
+    let markers = [];
     drawings.forEach(d => {
         if (d.type === 'buyMarker') {
             markers.push({ time: d.time, position: 'belowBar', color: '#16a34a', shape: 'arrowUp', text: 'BUY', id: d.id });
@@ -1615,6 +1897,14 @@ function updateMarkers(chartData) {
         }
     });
     
+    if (window.paperTrading) {
+        const ptMarkers = window.paperTrading.getChartMarkers(chartData.symbol);
+        markers = markers.concat(ptMarkers);
+        if (typeof window.paperTrading.updatePositionLines === 'function') {
+            window.paperTrading.updatePositionLines(chartData);
+        }
+    }
+    
     markers.sort((a, b) => a.time - b.time);
     chartData.candleSeries.setMarkers(markers);
 }
@@ -1622,17 +1912,18 @@ function updateMarkers(chartData) {
 function renderAlertLine(chartData, alertObj) {
     if (!chartData.candleSeries) return;
     
-    const color = alertObj.active === false ? '#6b7280' : '#f59e0b';
-    
+    const oldEl = document.getElementById(`alert-bell-${chartData.id}-${alertObj.id}`);
+    if (oldEl) oldEl.remove();
+
     const priceLine = chartData.candleSeries.createPriceLine({
         price: alertObj.price,
-        color: color,
+        color: 'rgba(0, 0, 0, 0)',
         lineWidth: 1,
-        lineStyle: 2, 
+        lineStyle: 1, 
         axisLabelVisible: true,
-        title: '🔔',
+        title: alertObj.active === false ? '🔕' : '🔔',
     });
-    
+
     if (!chartData.renderedDrawings) chartData.renderedDrawings = {};
     chartData.renderedDrawings[alertObj.id] = priceLine;
 }
@@ -1672,16 +1963,17 @@ function openPriceAlertModal(chartData, defaultPrice) {
             const alertObj = {
                 type: 'alert',
                 symbol: chartData.symbol,
-                timeframe: chartData.interval,
                 price: price,
                 id: id,
                 active: true
             };
-            const key = `${chartData.symbol}_${chartData.interval}`;
+            const key = chartData.symbol;
             if (!state.drawings[key]) state.drawings[key] = [];
             state.drawings[key].push(alertObj);
             saveDrawings();
-            renderAlertLine(chartData, alertObj);
+            Object.values(state.charts).forEach(cd => {
+                if (cd.symbol === chartData.symbol) renderAlertLine(cd, alertObj);
+            });
             
             if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
                 Notification.requestPermission();
@@ -1721,11 +2013,19 @@ function openAlertSettingsModal(chartData, alertObj, key) {
     };
     
     document.getElementById("edit-alert-delete").onclick = () => {
-        const priceLine = chartData.renderedDrawings?.[alertObj.id];
-        if (priceLine) {
-            try { chartData.candleSeries.removePriceLine(priceLine); } catch (e) {}
-            delete chartData.renderedDrawings[alertObj.id];
-        }
+        Object.values(state.charts).forEach(cd => {
+            if (cd.symbol === chartData.symbol) {
+                const priceLine = cd.renderedDrawings?.[alertObj.id];
+                if (priceLine) {
+                    if (priceLine instanceof HTMLElement) {
+                        priceLine.remove();
+                    } else {
+                        try { cd.candleSeries.removePriceLine(priceLine); } catch (e) {}
+                    }
+                    delete cd.renderedDrawings[alertObj.id];
+                }
+            }
+        });
         const idx = state.drawings[key].findIndex(l => l.id === alertObj.id);
         if (idx !== -1) state.drawings[key].splice(idx, 1);
         saveDrawings();
@@ -1737,14 +2037,22 @@ function openAlertSettingsModal(chartData, alertObj, key) {
         alertObj.price = isNaN(newPrice) ? alertObj.price : newPrice;
         alertObj.active = true;
         
-        const priceLine = chartData.renderedDrawings?.[alertObj.id];
-        if (priceLine && priceLine.applyOptions) {
-            priceLine.applyOptions({
-                price: alertObj.price,
-                title: '🔔',
-                color: '#f59e0b'
-            });
-        }
+        Object.values(state.charts).forEach(cd => {
+            if (cd.symbol === chartData.symbol) {
+                const priceLine = cd.renderedDrawings?.[alertObj.id];
+                if (priceLine) {
+                    if (priceLine instanceof HTMLElement) {
+                        if (priceLine._updatePosition) priceLine._updatePosition();
+                    } else if (priceLine.applyOptions) {
+                        priceLine.applyOptions({
+                            price: alertObj.price,
+                                        title: '🔔',
+                                        color: 'rgba(0, 0, 0, 0)'
+                        });
+                    }
+                }
+            }
+        });
         saveDrawings();
         modal.style.display = "none";
     };
@@ -1754,7 +2062,7 @@ function checkAlerts(chartData, currentPrice) {
     if (chartData.lastPrice === null) return;
     const prevPrice = chartData.lastPrice;
     
-    const key = `${chartData.symbol}_${chartData.interval}`;
+    const key = chartData.symbol;
     const lines = state.drawings[key];
     if (!lines) return;
     
@@ -1770,10 +2078,18 @@ function checkAlerts(chartData, currentPrice) {
                 saveDrawings();
                 showNotification(`Alert Triggered: ${chartData.symbol}`, `Price crossed ${line.price}. Current: ${currentPrice}`);
                 
-                const priceLine = chartData.renderedDrawings?.[line.id];
-                if (priceLine && priceLine.applyOptions) {
-                    priceLine.applyOptions({ color: '#6b7280', title: '🔔' });
-                }
+                Object.values(state.charts).forEach(cd => {
+                    if (cd.symbol === chartData.symbol) {
+                        const priceLine = cd.renderedDrawings?.[line.id];
+                        if (priceLine) {
+                            if (priceLine instanceof HTMLElement) {
+                                if (priceLine._updatePosition) priceLine._updatePosition();
+                            } else if (priceLine.applyOptions) {
+                                    priceLine.applyOptions({ color: 'rgba(0, 0, 0, 0)', title: '🔕' });
+                            }
+                        }
+                    }
+                });
             }
         }
     });
@@ -1978,6 +2294,13 @@ function subscribeChart(chartData) {
             method: "subscribe",
             subscription: { type: "trades", coin: chartData.symbol }
         }));
+        if (state.chartCount === 1 && chartData.id === 'chart-1') {
+            state.hlWs.send(JSON.stringify({
+                method: "subscribe",
+                subscription: { type: "l2Book", coin: chartData.symbol }
+            }));
+            chartData.l2Subscribed = true;
+        }
         chartData.liveSubscribed = true;
     } else if (chartData.source !== "hyperliquid") {
         chartData.liveSubscribed = true;
@@ -2001,6 +2324,13 @@ function unsubscribeChart(chartData) {
                 method: "unsubscribe",
                 subscription: { type: "trades", coin: chartData.symbol }
             }));
+            if (chartData.l2Subscribed) {
+                state.hlWs.send(JSON.stringify({
+                    method: "unsubscribe",
+                    subscription: { type: "l2Book", coin: chartData.symbol }
+                }));
+                chartData.l2Subscribed = false;
+            }
         }
     }
     chartData.liveSubscribed = false;
@@ -2038,6 +2368,10 @@ function applyPriceUpdate(chartData, tick) {
         chartData.isNewBar = true;
     }
 
+    if (window.paperTrading) {
+        window.paperTrading.updatePrice(chartData.symbol, price, time);
+    }
+
     chartData.flashDirection = chartData.lastPrice === null || price >= chartData.lastPrice ? "up" : "down";
     chartData.lastPrice = price;
     chartData.lastDirection = candle.close >= candle.open ? 'up' : 'down';
@@ -2046,6 +2380,222 @@ function applyPriceUpdate(chartData, tick) {
         chartData.pendingUpdate = true;
         requestAnimationFrame(() => flushChartUpdate(chartData));
     }
+}
+
+function getIntervalSeconds(interval) {
+    const map = { "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400, "1wk": 604800, "1mo": 2592000 };
+    return map[interval] || 60;
+}
+
+function handleCrosshairSync(sourceChartData, param) {
+    if (sourceChartData.symbol === "No Chart" || sourceChartData.symbol === "none") return;
+
+    const isLight = state.theme === "light";
+    const syncColor = isLight ? "#0f172a" : "#ffffff";
+
+    if (!param.point || !sourceChartData.candleSeries) {
+        Object.values(state.charts).forEach(target => {
+            const crosshairEl = document.getElementById(`${target.id}-sync-crosshair`);
+            if (crosshairEl) crosshairEl.style.display = 'none';
+        });
+        return;
+    }
+
+    const hoveredPrice = sourceChartData.candleSeries.coordinateToPrice(param.point.y);
+    const sourceTimeScale = sourceChartData.chart.timeScale();
+    const logical = sourceTimeScale.coordinateToLogical(param.point.x);
+
+        let sourceTimeSec = null;
+        if (param.time !== undefined) {
+            sourceTimeSec = typeof param.time === 'object' ? TimeUtils._getMs(param.time) / 1000 : param.time;
+        } else if (logical !== null && sourceChartData.cachedData.length > 0) {
+            const lastCandle = sourceChartData.cachedData[sourceChartData.cachedData.length - 1];
+            const lastCoord = sourceTimeScale.timeToCoordinate(lastCandle.time);
+            if (lastCoord !== null) {
+                const lastLogical = sourceTimeScale.coordinateToLogical(lastCoord);
+                if (lastLogical !== null) {
+                    sourceTimeSec = lastCandle.time + (logical - lastLogical) * getIntervalSeconds(sourceChartData.interval);
+                }
+            }
+        }
+
+    Object.values(state.charts).forEach(target => {
+        if (target.id === sourceChartData.id) {
+            const crosshairEl = document.getElementById(`${target.id}-sync-crosshair`);
+            if (crosshairEl) crosshairEl.style.display = 'none';
+            return;
+        }
+
+        if (target.symbol === sourceChartData.symbol && target.chart && target.candleSeries) {
+            let crosshairEl = document.getElementById(`${target.id}-sync-crosshair`);
+            if (!crosshairEl) {
+                const container = document.getElementById(`${target.id}-container`);
+                if (!container) return;
+                
+                crosshairEl = document.createElement('div');
+                crosshairEl.id = `${target.id}-sync-crosshair`;
+                crosshairEl.style.position = 'absolute';
+                crosshairEl.style.top = '0';
+                crosshairEl.style.left = '0';
+                crosshairEl.style.width = '100%';
+                crosshairEl.style.height = '100%';
+                crosshairEl.style.pointerEvents = 'none';
+                crosshairEl.style.zIndex = '50';
+                crosshairEl.style.overflow = 'visible';
+                
+                const vLine = document.createElement('div');
+                vLine.id = `${target.id}-sync-vline`;
+                vLine.style.position = 'absolute';
+                vLine.style.top = '0';
+                vLine.style.bottom = '0';
+                vLine.style.width = '0px';
+                vLine.style.borderLeft = '1px dashed';
+                vLine.style.opacity = '0.5';
+                
+                const hLine = document.createElement('div');
+                hLine.id = `${target.id}-sync-hline`;
+                hLine.style.position = 'absolute';
+                hLine.style.left = '0';
+                hLine.style.height = '0px';
+                hLine.style.borderTop = '1px dashed';
+                hLine.style.opacity = '0.5';
+                
+                const vLabel = document.createElement('div');
+                vLabel.id = `${target.id}-sync-vlabel`;
+                vLabel.style.position = 'absolute';
+                vLabel.style.bottom = '0';
+                vLabel.style.transform = 'translateX(-50%)';
+                vLabel.style.padding = '2px 6px';
+                vLabel.style.fontSize = '11px';
+                vLabel.style.fontFamily = 'inherit';
+                vLabel.style.borderRadius = '4px';
+                vLabel.style.zIndex = '51';
+                vLabel.style.whiteSpace = 'nowrap';
+                
+                const hLabel = document.createElement('div');
+                hLabel.id = `${target.id}-sync-hlabel`;
+                hLabel.style.position = 'absolute';
+                hLabel.style.right = '0';
+                hLabel.style.transform = 'translateY(-50%)';
+                hLabel.style.padding = '2px 6px';
+                hLabel.style.fontSize = '11px';
+                hLabel.style.fontFamily = 'inherit';
+                hLabel.style.borderRadius = '4px';
+                hLabel.style.zIndex = '51';
+                hLabel.style.textAlign = 'center';
+                
+                crosshairEl.appendChild(vLine);
+                crosshairEl.appendChild(hLine);
+                crosshairEl.appendChild(vLabel);
+                crosshairEl.appendChild(hLabel);
+                container.appendChild(crosshairEl);
+            }
+
+            const vLine = document.getElementById(`${target.id}-sync-vline`);
+            const hLine = document.getElementById(`${target.id}-sync-hline`);
+            const vLabel = document.getElementById(`${target.id}-sync-vlabel`);
+            const hLabel = document.getElementById(`${target.id}-sync-hlabel`);
+            
+            vLine.style.borderColor = syncColor;
+            hLine.style.borderColor = syncColor;
+            
+            const labelBgC = syncColor;
+            const labelTextC = isLight ? "#ffffff" : "#0f172a";
+            vLabel.style.backgroundColor = labelBgC;
+            vLabel.style.color = labelTextC;
+            hLabel.style.backgroundColor = labelBgC;
+            hLabel.style.color = labelTextC;
+
+            let targetX = null;
+            let targetY = null;
+            const targetTimeScale = target.chart.timeScale();
+
+            if (sourceTimeSec !== null && target.cachedData.length > 0) {
+                let low = 0; let high = target.cachedData.length - 1;
+                let targetIdx = -1;
+                while (low <= high) {
+                    const mid = Math.floor((low + high) / 2);
+                    const current = target.cachedData[mid];
+                    if (current.time <= sourceTimeSec) {
+                        targetIdx = mid;
+                        low = mid + 1;
+                    } else {
+                        high = mid - 1;
+                    }
+                }
+                
+                if (targetIdx !== -1) {
+                    const targetCandle = target.cachedData[targetIdx];
+                    const coord = targetTimeScale.timeToCoordinate(targetCandle.time);
+                    if (coord !== null) {
+                        const sourceIntSec = getIntervalSeconds(sourceChartData.interval);
+                        const targetIntSec = getIntervalSeconds(target.interval);
+                        const baseLogical = targetTimeScale.coordinateToLogical(coord);
+                        
+                        if (baseLogical !== null) {
+                            const diffLogical = (sourceTimeSec - targetCandle.time) / targetIntSec;
+                            if (sourceIntSec < targetIntSec) {
+                                // Snap to the larger timeframe block, projecting seamlessly into future blank space
+                                targetX = targetTimeScale.logicalToCoordinate(baseLogical + Math.floor(diffLogical));
+                            } else {
+                                // Glide smoothly if source is a larger or equal timeframe
+                                targetX = targetTimeScale.logicalToCoordinate(baseLogical + diffLogical);
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (hoveredPrice !== null) {
+                targetY = target.candleSeries.priceToCoordinate(hoveredPrice);
+            }
+
+            let rightScaleWidth = 0;
+            try { rightScaleWidth = target.chart.priceScale('right').width(); } catch(e) {}
+            const containerWidth = document.getElementById(`${target.id}-container`).clientWidth;
+
+                crosshairEl.style.display = 'block';
+
+            // Ensures the vertical line completely hides if dragged over the right price scale
+            if (targetX !== null && targetX <= (containerWidth - rightScaleWidth)) {
+                    vLine.style.display = 'block';
+                    vLine.style.left = `${targetX}px`;
+                    
+                    vLabel.style.display = 'block';
+                    vLabel.style.left = `${targetX}px`;
+                    const date = new Date(sourceTimeSec * 1000);
+                    const day = date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit" });
+                    const mon = date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", month: "short" });
+                    const yy = date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", year: "2-digit" });
+                    const timeStr = date.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false });
+                    vLabel.textContent = `${day} ${mon} '${yy} ${timeStr}`;
+                } else {
+                    vLine.style.display = 'none';
+                    vLabel.style.display = 'none';
+                }
+
+                if (targetY !== null && hoveredPrice !== null) {
+                    hLine.style.display = 'block';
+                    hLine.style.top = `${targetY}px`;
+                    hLine.style.width = `${containerWidth - rightScaleWidth}px`;
+                    
+                    hLabel.style.display = 'block';
+                    hLabel.style.top = `${targetY}px`;
+                    hLabel.style.width = `${rightScaleWidth}px`;
+                    hLabel.textContent = formatPrice(hoveredPrice);
+                } else {
+                    hLine.style.display = 'none';
+                    hLabel.style.display = 'none';
+                }
+
+                if (targetX === null && targetY === null) {
+                    crosshairEl.style.display = 'none';
+                }
+        } else {
+            const crosshairEl = document.getElementById(`${target.id}-sync-crosshair`);
+            if (crosshairEl) crosshairEl.style.display = 'none';
+        }
+    });
 }
 
 function flushChartUpdate(chartData) {
@@ -2105,6 +2655,10 @@ function flushChartUpdate(chartData) {
         chartData.chart.timeScale().scrollToRealTime();
     }
 
+    if (chartData._vLineHandlers) {
+        chartData._vLineHandlers.forEach(fn => fn());
+    }
+
     if (!document.hidden) {
         const now = Date.now();
         if (now - chartData.lastUIUpdate > 100) {
@@ -2115,6 +2669,7 @@ function flushChartUpdate(chartData) {
             
             if (state.chartCount === 1 && chartData.id === 'chart-1') {
                 updateInfoPanelPrice(chartData.lastPrice);
+                updateOrderBookPrice(chartData.lastPrice);
             }
         }
     }
@@ -2300,6 +2855,15 @@ function updateConnectionStatus() {
     const status = document.getElementById("connection-status");
     if (status) {
         status.textContent = isConnected ? "Live connected" : "Live disconnected";
+        if (isSSEConnected && isWSConnected) {
+            status.textContent = "Live connected (All)";
+        } else if (isSSEConnected) {
+            status.textContent = "Live connected (Stocks)";
+        } else if (isWSConnected) {
+            status.textContent = "Live connected (Crypto)";
+        } else {
+            status.textContent = "Live disconnected";
+        }
         status.className = `status-indicator ${isConnected ? "connected" : "disconnected"}`;
     }
     
@@ -2329,6 +2893,10 @@ function setActiveChart(chartId) {
     if (newPane) newPane.classList.add('active-chart');
 
     updateMarketMoverHighlights();
+    
+    if (window.paperTrading && state.charts[chartId]) {
+        window.paperTrading.setActiveSymbol(state.charts[chartId].symbol);
+    }
 }
 
 function updateMarketMoverHighlights() {
@@ -2359,8 +2927,11 @@ function switchChartSymbol(chartId, newSymbol) {
 
         resetChart(chartData);
         saveLayoutState();
+        
         if (state.chartCount === 1 && chartData.id === 'chart-1') {
             clearInfoPanel();
+            clearOrderBook();
+            updateOrderBookHeader('none');
         }
         updateMarketMoverHighlights();
         return;
@@ -2394,10 +2965,15 @@ function switchChartSymbol(chartId, newSymbol) {
     saveLayoutState();
 
     if (state.chartCount === 1 && chartData.id === 'chart-1') {
+        clearOrderBook();
         fetchAndRenderAssetInfo(chartData.symbol);
     }
 
     updateMarketMoverHighlights();
+
+    if (window.paperTrading && state.activeChartId === chartId) {
+        window.paperTrading.setActiveSymbol(newSymbol);
+    }
 }
 
 function calculateSMA(data, period) {
@@ -2774,12 +3350,81 @@ function injectThemeStyles() {
             box-sizing: border-box !important;
             cursor: pointer;
             font-size: 12px !important;
+            margin: 0 !important;
         }
         .dropdown-arrow {
             position: absolute;
-            right: 2px;
+            right: 4px;
             pointer-events: none;
             color: #8b9bb0;
+        }
+        .layout-6 .symbol-select-input,
+        .layout-8 .symbol-select-input {
+            width: 52px !important;
+            padding-left: 4px !important;
+            padding-right: 16px !important;
+            font-size: 11px !important;
+        }
+        .layout-6 .dropdown-arrow,
+        .layout-8 .dropdown-arrow {
+            width: 10px;
+            height: 10px;
+        }
+        .layout-6 .pane-controls,
+        .layout-8 .pane-controls {
+            gap: 2px !important;
+        }
+        
+        /* Sidebar Tabs Implementation */
+        .sidebar-tabbed { flex-direction: column !important; }
+        .sidebar-tabs-header { display: flex; background: #1e293b; border-bottom: 1px solid #394654; flex-shrink: 0; }
+        body.light-theme .sidebar-tabs-header { background: #f1f5f9; border-bottom-color: #cbd5e1; }
+        .sidebar-tab { flex: 1; text-align: center; padding: 10px 0; font-size: 12px; font-weight: 600; cursor: pointer; color: #8b9bb0; border-bottom: 2px solid transparent; transition: all 0.2s; }
+        body.light-theme .sidebar-tab { color: #64748b; }
+        .sidebar-tab.active { color: #3b82f6; border-bottom-color: #3b82f6; background: rgba(59, 130, 246, 0.1); }
+        .sidebar-slider-tabs { display: flex; width: 300%; height: 100%; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
+        .sidebar-panel { width: 33.3333%; height: 100%; overflow-y: auto; flex-shrink: 0; }
+
+        /* Paper Trading Module CSS */
+        .pt-container { padding: 16px; font-family: inherit; font-size: 13px; color: #d8dee8; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; }
+        body.light-theme .pt-container { color: #0f172a; }
+        .pt-header { background: #151b23; border: 1px solid #394654; padding: 12px; border-radius: 6px; }
+        body.light-theme .pt-header { background: #ffffff; border-color: #cbd5e1; }
+        .pt-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; color: #3b82f6; letter-spacing: 1px; }
+        .pt-stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+        .pt-stat-box { display: flex; flex-direction: column; }
+        .pt-label { font-size: 11px; color: #8b9bb0; text-transform: uppercase; }
+        body.light-theme .pt-label { color: #64748b; }
+        .pt-value { font-size: 14px; font-weight: 600; }
+        .pt-green { color: #10b981 !important; }
+        .pt-red { color: #ef4444 !important; }
+        .pt-form-group { margin-bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
+        .pt-input { background: #0f1419; color: #d8dee8; border: 1px solid #394654; padding: 8px; border-radius: 4px; font-size: 13px; width: 100%; box-sizing: border-box;}
+        body.light-theme .pt-input { background: #f8fafc; color: #0f172a; border-color: #cbd5e1; }
+        .pt-btn-group { display: flex; gap: 8px; margin-top: 12px; }
+        .pt-btn { flex: 1; padding: 10px; font-weight: 700; border: none; border-radius: 4px; cursor: pointer; color: white; transition: opacity 0.2s; }
+        .pt-btn:hover { opacity: 0.9; }
+        .pt-buy-btn { background: #10b981; }
+        .pt-sell-btn { background: #ef4444; }
+        .pt-close-btn { background: #394654; color: white; padding: 4px 8px; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;}
+        body.light-theme .pt-close-btn { background: #e2e8f0; color: #0f172a; }
+        .pt-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+        .pt-table th, .pt-table td { padding: 6px 4px; text-align: left; border-bottom: 1px solid #394654; }
+        body.light-theme .pt-table th, body.light-theme .pt-table td { border-bottom-color: #cbd5e1; }
+        .pt-table th { color: #8b9bb0; font-weight: normal; }
+        body.light-theme .pt-table th { color: #64748b; }
+        .pt-section { border-top: 1px dashed #394654; padding-top: 16px; }
+        body.light-theme .pt-section { border-top-color: #cbd5e1; }
+        .pt-collapsible-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; font-weight: 700; color: #8b9bb0; text-transform: uppercase; font-size: 12px; }
+        body.light-theme .pt-collapsible-header { color: #64748b; }
+        .pt-collapsible-content { display: none; margin-top: 12px; }
+        .pt-collapsible-content.open { display: block; }
+
+        .layout-8 .ticker-change {
+            display: none !important;
+        }
+        .layout-8 .ticker-symbol {
+            font-size: 11px !important;
         }
         .pane-controls {
             display: flex !important;
@@ -3010,6 +3655,42 @@ function injectThemeStyles() {
             color: white;
             border-color: #ef4444;
         }
+        .hover-add-alert-btn {
+            position: absolute !important;
+            width: 18px !important;
+            height: 18px !important;
+            min-width: 18px !important;
+            max-width: 18px !important;
+            min-height: 18px !important;
+            max-height: 18px !important;
+            background: #151b23;
+            color: #10b981;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            z-index: 100;
+            font-size: 14px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+            pointer-events: auto;
+            border: 1px solid #394654;
+            transition: background-color 0.1s ease, color 0.1s ease, border-color 0.1s ease !important;
+            box-sizing: border-box;
+            padding: 0;
+            margin: 0;
+            line-height: 1;
+            font-weight: bold;
+        }
+        body.light-theme .hover-add-alert-btn {
+            background: #ffffff;
+            border-color: #cbd5e1;
+        }
+        .hover-add-alert-btn:hover {
+            background: #10b981;
+            color: white;
+            border-color: #10b981;
+        }
         .chart-container.hovering-hline,
         .chart-container.hovering-hline * {
             cursor: ns-resize !important;
@@ -3156,14 +3837,14 @@ function injectThemeStyles() {
             border: 1px solid #3b82f6;
             box-shadow: 0 0 8px -1px rgba(59, 130, 246, 0.4);
         }
+        
         /* Asset Info Panel Styles */
         .charts-grid.layout-1.with-info-panel {
             display: grid;
-            grid-template-columns: 78% calc(22% - 12px);
+            grid-template-columns: 1fr 340px;
             gap: 12px;
             /* Lock grid height to screen view to prevent panel from stretching it */
             height: calc(100vh - 105px) !important;
-            height: calc(100vh - 118px) !important;
         }
         /* Force children to respect grid height so overflow scrolling kicks in */
         .charts-grid.layout-1.with-info-panel > * {
@@ -3187,22 +3868,174 @@ function injectThemeStyles() {
                 height: 60vh;
             }
         }
-        .asset-info-panel {
+        
+        .right-sidebar-wrapper {
             background-color: #151b23;
             border: 1px solid #394654;
             border-radius: 8px;
-            overflow-y: auto;
             display: flex;
-            flex-direction: column;
+            flex-direction: row;
+            height: 100%;
+            overflow: hidden;
             color: #d8dee8;
             font-family: inherit;
-            height: 100%;
         }
-        body.light-theme .asset-info-panel {
+        body.light-theme .right-sidebar-wrapper {
             background-color: #ffffff;
             border-color: #cbd5e1;
             color: #0f172a;
         }
+        .sidebar-viewport {
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+        }
+        .sidebar-slider {
+            display: flex;
+            width: 200%;
+            height: 100%;
+            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .asset-info-panel, .order-book-panel {
+            width: 33.3333%;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            height: 100%;
+            background: transparent;
+            border: none;
+            border-radius: 0;
+            flex-shrink: 0;
+        }
+        .ob-toggle-btn {
+            width: 18px;
+            background: #1e293b;
+            color: #8b9bb0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            border-left: 1px solid #394654;
+            font-size: 10px;
+            font-weight: 600;
+            letter-spacing: 2px;
+            writing-mode: vertical-rl;
+            text-orientation: mixed;
+            user-select: none;
+            transition: background 0.2s, color 0.2s;
+            flex-shrink: 0;
+        }
+        body.light-theme .ob-toggle-btn {
+            background: #f1f5f9;
+            color: #64748b;
+            border-left-color: #cbd5e1;
+        }
+        .ob-toggle-btn:hover {
+            background: #334155;
+            color: #ffffff;
+        }
+        body.light-theme .ob-toggle-btn:hover {
+            background: #e2e8f0;
+            color: #0f172a;
+        }
+        /* Order Book Styles */
+        .ob-header {
+            padding: 16px;
+            border-bottom: 1px solid #394654;
+            text-align: center;
+            flex-shrink: 0;
+        }
+        body.light-theme .ob-header {
+            border-bottom-color: #cbd5e1;
+        }
+        .ob-symbol-name {
+            font-size: 16px;
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+        .ob-price-row {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 8px;
+        }
+        .ob-current-price {
+            font-size: 18px;
+            font-weight: 700;
+        }
+        .ob-24h-change {
+            font-size: 13px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+        .ob-col-headers {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 16px;
+            color: #8b9bb0;
+            font-weight: 600;
+            border-bottom: 1px solid #394654;
+            flex-shrink: 0;
+        }
+        body.light-theme .ob-col-headers {
+            color: #64748b;
+            border-bottom-color: #cbd5e1;
+        }
+        .ob-scroll-container {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            font-size: 12px;
+            position: relative;
+        }
+        .ob-asks, .ob-bids {
+            display: flex;
+            flex-direction: column;
+        }
+        .ob-asks {
+            justify-content: flex-end;
+        }
+        .ob-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 2px 16px;
+            position: relative;
+        }
+        .ob-row span {
+            z-index: 1;
+        }
+        .ob-ask-price { color: #ef4444; font-weight: 500; }
+        .ob-bid-price { color: #10b981; font-weight: 500; }
+        .ob-size { color: #d8dee8; }
+        body.light-theme .ob-size { color: #0f172a; }
+        .ob-spread {
+            text-align: center;
+            padding: 6px 0;
+            margin: 4px 0;
+            border-top: 1px solid #394654;
+            border-bottom: 1px solid #394654;
+            color: #8b9bb0;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
+        body.light-theme .ob-spread {
+            border-top-color: #cbd5e1;
+            border-bottom-color: #cbd5e1;
+            color: #64748b;
+        }
+        .ob-bg {
+            position: absolute;
+            top: 0;
+            right: 0;
+            height: 100%;
+            opacity: 0.15;
+            z-index: 0;
+            transition: width 0.1s;
+        }
+        .ob-ask-bg { background-color: #ef4444; }
+        .ob-bid-bg { background-color: #10b981; }
         .info-panel-content {
             padding: 16px;
             display: flex;
@@ -3341,12 +4174,13 @@ function toggleTheme() {
         if (chartData.renderedDrawings) {
             const lineColor = isLight ? '#3b82f6' : '#60a5fa';
             Object.values(chartData.renderedDrawings).forEach(pl => {
-                if (pl && pl.applyOptions) {
+            if (pl && !(pl instanceof HTMLElement) && pl.applyOptions) {
                     pl.applyOptions({ color: lineColor });
                 }
             });
         }
         restoreDrawings(chartData);
+        chartData.isSyncedCrosshairActive = false;
     });
 }
 
@@ -3374,16 +4208,90 @@ function getChartThemeOptions(isLight) {
 const assetInfoCache = {};
 
 function createInfoPanel() {
+    const wrapper = document.createElement('div');
+    wrapper.id = 'right-sidebar-wrapper';
+    wrapper.className = 'right-sidebar-wrapper sidebar-tabbed';
+
+    const tabsHeader = document.createElement('div');
+    tabsHeader.className = 'sidebar-tabs-header';
+    tabsHeader.innerHTML = `
+        <div class="sidebar-tab active" data-index="0">INFO</div>
+        <div class="sidebar-tab" data-index="1">BOOK</div>
+        <div class="sidebar-tab" data-index="2">TRADE</div>
+    `;
+
+    const viewport = document.createElement('div');
+    viewport.className = 'sidebar-viewport';
+
+    const slider = document.createElement('div');
+    slider.id = 'sidebar-slider';
+    slider.className = 'sidebar-slider-tabs';
+
     const panel = document.createElement('aside');
     panel.id = 'asset-info-panel';
-    panel.className = 'asset-info-panel';
+    panel.className = 'sidebar-panel asset-info-panel';
     panel.innerHTML = `
         <div class="info-panel-content">
             <div id="info-panel-loading" class="info-panel-message">Loading Asset Info...</div>
             <div id="info-panel-data" style="display: none;"></div>
         </div>
     `;
-    return panel;
+
+    const obPanel = document.createElement('aside');
+    obPanel.id = 'order-book-panel';
+    obPanel.className = 'sidebar-panel order-book-panel';
+    obPanel.innerHTML = `
+        <div class="ob-header">
+            <div id="ob-symbol-name" class="ob-symbol-name">--</div>
+            <div class="ob-price-row">
+                <span id="ob-current-price" class="ob-current-price">--</span>
+                <span id="ob-24h-change" class="ob-24h-change">--</span>
+            </div>
+        </div>
+        <div class="ob-col-headers">
+            <span>Price</span>
+            <span>Size</span>
+        </div>
+        <div class="ob-scroll-container">
+            <div id="ob-asks" class="ob-asks"></div>
+            <div id="ob-spread" class="ob-spread">--</div>
+            <div id="ob-bids" class="ob-bids"></div>
+        </div>
+    `;
+
+    const tradePanel = document.createElement('aside');
+    tradePanel.id = 'paper-trade-panel';
+    tradePanel.className = 'sidebar-panel paper-trade-panel';
+
+    slider.appendChild(panel);
+    slider.appendChild(obPanel);
+    slider.appendChild(tradePanel);
+    viewport.appendChild(slider);
+    
+    wrapper.appendChild(tabsHeader);
+    wrapper.appendChild(viewport);
+
+    const tabs = tabsHeader.querySelectorAll('.sidebar-tab');
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            tabs.forEach(t => t.classList.remove('active'));
+            tab.classList.add('active');
+            const index = parseInt(tab.getAttribute('data-index'));
+            slider.style.transform = `translateX(-${index * 33.333}%)`;
+            localStorage.setItem('trading-dashboard-active-tab', index);
+            state.obCentered = false;
+        });
+    });
+
+    const savedTab = localStorage.getItem('trading-dashboard-active-tab') || '0';
+    const targetTab = tabs[parseInt(savedTab)];
+    if (targetTab) {
+        targetTab.click();
+    }
+
+    tradePanel.innerHTML = '<div class="pt-container"><div class="info-panel-message">Loading Paper Trading...</div></div>';
+
+    return wrapper;
 }
 
 function clearInfoPanel() {
@@ -3489,7 +4397,6 @@ function updateTickerUI(containerId, data) {
         const isActive = item.symbol === activeSymbol;
         const activeClass = isActive ? 'active-mover' : '';
         html += `
-            <div class="market-ticker-item">
             <div class="market-ticker-item ${activeClass}" data-symbol="${item.symbol}" title="Click to load ${item.symbol} chart">
                 <span class="market-ticker-symbol">${item.symbol}</span>
                 <span class="market-ticker-percent ${colorClass}">${sign}${item.change.toFixed(2)}%</span>
@@ -3653,6 +4560,7 @@ async function fetchAndRenderAssetInfo(symbol, forceRefresh = false) {
 
     const info = assetInfoCache[symbol];
     renderAssetInfo(info);
+    updateOrderBookHeader(symbol);
 
     loadingContainer.style.display = 'none';
     dataContainer.style.display = 'block';
@@ -3871,4 +4779,115 @@ function runWheelDiagnostics(chartId) {
     container.addEventListener('wheel', tracker('Chart Container'), { capture: true, passive: true });
     if (canvas) canvas.addEventListener('wheel', tracker('Chart Canvas'), { capture: true, passive: true });
     console.groupEnd();
+}
+
+// --- Order Book Functions ---
+function updateOrderBookHeader(symbol) {
+    const info = assetInfoCache[symbol];
+    if (info) {
+        const symbolEl = document.getElementById('ob-symbol-name');
+        const priceEl = document.getElementById('ob-current-price');
+        const changeEl = document.getElementById('ob-24h-change');
+
+        if (symbolEl) symbolEl.textContent = info.symbol || symbol;
+        if (priceEl && info.price !== null) priceEl.textContent = formatCurrency(info.price);
+        if (changeEl && info.change24 !== null) {
+            changeEl.textContent = formatPercent(info.change24);
+            changeEl.className = `ob-24h-change ${getPerfClass(info.change24)}`;
+        }
+    } else if (symbol === 'none') {
+        const symbolEl = document.getElementById('ob-symbol-name');
+        const priceEl = document.getElementById('ob-current-price');
+        const changeEl = document.getElementById('ob-24h-change');
+
+        if (symbolEl) symbolEl.textContent = '--';
+        if (priceEl) priceEl.textContent = '--';
+        if (changeEl) {
+            changeEl.textContent = '--';
+            changeEl.className = 'ob-24h-change';
+        }
+    }
+}
+
+function updateOrderBookPrice(price) {
+    const priceEl = document.getElementById('ob-current-price');
+    if (priceEl && price !== null) {
+        priceEl.textContent = formatCurrency(price);
+    }
+}
+
+function clearOrderBook() {
+    state.obCentered = false;
+    const asksContainer = document.getElementById('ob-asks');
+    const bidsContainer = document.getElementById('ob-bids');
+    const spreadContainer = document.getElementById('ob-spread');
+    if (asksContainer) asksContainer.innerHTML = '';
+    if (bidsContainer) bidsContainer.innerHTML = '';
+    if (spreadContainer) spreadContainer.innerHTML = '--';
+}
+
+function renderOrderBook(data) {
+    const slider = document.getElementById('sidebar-slider');
+    if (!slider || !slider.style.transform.includes('33.333%')) return;
+
+    const bids = data.levels[0];
+    const asks = data.levels[1];
+
+    const asksContainer = document.getElementById('ob-asks');
+    const bidsContainer = document.getElementById('ob-bids');
+    const spreadContainer = document.getElementById('ob-spread');
+
+    if (!asksContainer || !bidsContainer || !spreadContainer) return;
+
+    const displayAsks = asks.slice(0, 20).reverse();
+    const displayBids = bids.slice(0, 20);
+
+    let maxAskSize = 0;
+    displayAsks.forEach(a => maxAskSize = Math.max(maxAskSize, parseFloat(a.sz)));
+    let maxBidSize = 0;
+    displayBids.forEach(b => maxBidSize = Math.max(maxBidSize, parseFloat(b.sz)));
+
+    let asksHtml = '';
+    displayAsks.forEach(a => {
+        const size = parseFloat(a.sz);
+        const width = maxAskSize > 0 ? (size / maxAskSize) * 100 : 0;
+        asksHtml += `
+            <div class="ob-row">
+                <div class="ob-bg ob-ask-bg" style="width: ${width}%"></div>
+                <span class="ob-ask-price">${parseFloat(a.px).toFixed(2)}</span>
+                <span class="ob-size">${size.toFixed(4)}</span>
+            </div>
+        `;
+    });
+    asksContainer.innerHTML = asksHtml;
+
+    let bidsHtml = '';
+    displayBids.forEach(b => {
+        const size = parseFloat(b.sz);
+        const width = maxBidSize > 0 ? (size / maxBidSize) * 100 : 0;
+        bidsHtml += `
+            <div class="ob-row">
+                <div class="ob-bg ob-bid-bg" style="width: ${width}%"></div>
+                <span class="ob-bid-price">${parseFloat(b.px).toFixed(2)}</span>
+                <span class="ob-size">${size.toFixed(4)}</span>
+            </div>
+        `;
+    });
+    bidsContainer.innerHTML = bidsHtml;
+
+    if (bids.length > 0 && asks.length > 0) {
+        const bestBid = parseFloat(bids[0].px);
+        const bestAsk = parseFloat(asks[0].px);
+        const spread = bestAsk - bestBid;
+        const spreadPercent = (spread / bestAsk) * 100;
+        spreadContainer.innerHTML = `${spread.toFixed(2)} (${spreadPercent.toFixed(3)}%)`;
+    }
+
+    if (!state.obCentered) {
+        const scrollContainer = document.querySelector('.ob-scroll-container');
+        if (scrollContainer && spreadContainer && spreadContainer.offsetTop > 0) {
+            scrollContainer.scrollTop = spreadContainer.offsetTop - (scrollContainer.clientHeight / 2) + (spreadContainer.clientHeight / 2);
+            state.obCentered = true;
+        }
+    }
 }

@@ -292,15 +292,18 @@ if (!window.LightweightCharts) {
                 if (this.priceLines && this.priceLines.length > 0) {
                     this.priceLines.forEach(pl => {
                         const y = scaleY(pl.options.price);
-                        const plLine = document.createElementNS(SVG_NS, "line");
-                        plLine.setAttribute("x1", plot.left);
-                        plLine.setAttribute("y1", y);
-                        plLine.setAttribute("x2", this.chart.width);
-                        plLine.setAttribute("y2", y);
-                        plLine.setAttribute("stroke", pl.options.color || "#3b82f6");
-                        plLine.setAttribute("stroke-width", pl.options.lineWidth || 2);
-                        if (pl.options.lineStyle === 2) plLine.setAttribute("stroke-dasharray", "4,4");
-                        this.group.appendChild(plLine);
+                        
+                        if (pl.options.lineVisible !== false) {
+                            const plLine = document.createElementNS(SVG_NS, "line");
+                            plLine.setAttribute("x1", plot.left);
+                            plLine.setAttribute("y1", y);
+                            plLine.setAttribute("x2", this.chart.width);
+                            plLine.setAttribute("y2", y);
+                            plLine.setAttribute("stroke", pl.options.color || "#3b82f6");
+                            plLine.setAttribute("stroke-width", pl.options.lineWidth || 2);
+                            if (pl.options.lineStyle === 2) plLine.setAttribute("stroke-dasharray", "4,4");
+                            this.group.appendChild(plLine);
+                        }
                         
                         if (pl.options.axisLabelVisible) {
                             const text = document.createElementNS(SVG_NS, "text");
@@ -441,15 +444,18 @@ if (!window.LightweightCharts) {
                 if (this.priceLines && this.priceLines.length > 0) {
                     this.priceLines.forEach(pl => {
                         const y = seriesScaleY(pl.options.price);
-                        const plLine = document.createElementNS(SVG_NS, "line");
-                        plLine.setAttribute("x1", plot.left);
-                        plLine.setAttribute("y1", y);
-                        plLine.setAttribute("x2", this.chart.width);
-                        plLine.setAttribute("y2", y);
-                        plLine.setAttribute("stroke", pl.options.color || "#ffffff");
-                        plLine.setAttribute("stroke-width", pl.options.lineWidth || 1);
-                        if (pl.options.lineStyle === 2) plLine.setAttribute("stroke-dasharray", "4,4");
-                        this.group.appendChild(plLine);
+                        
+                        if (pl.options.lineVisible !== false) {
+                            const plLine = document.createElementNS(SVG_NS, "line");
+                            plLine.setAttribute("x1", plot.left);
+                            plLine.setAttribute("y1", y);
+                            plLine.setAttribute("x2", this.chart.width);
+                            plLine.setAttribute("y2", y);
+                            plLine.setAttribute("stroke", pl.options.color || "#ffffff");
+                            plLine.setAttribute("stroke-width", pl.options.lineWidth || 1);
+                            if (pl.options.lineStyle === 2) plLine.setAttribute("stroke-dasharray", "4,4");
+                            this.group.appendChild(plLine);
+                        }
                         
                         if (pl.options.axisLabelVisible) {
                             const text = document.createElementNS(SVG_NS, "text");
