@@ -461,6 +461,9 @@ function renderGrid() {
             pendingUpdate: false,
             flashDirection: 'up',
             lastUIUpdate: 0,
+            customPriceOffset: 0,
+            isVerticalPanning: false,
+            panStartPrice: null,
         };
 
         state.charts[chartId] = chartData;
@@ -613,8 +616,17 @@ function populatePaneControls(chartData) {
 
     goLiveBtn.addEventListener("click", () => {
         if (chartData.chart) {
+            chartData.customPriceOffset = 0;
+            if (chartData.candleSeries) {
+                chartData.candleSeries.applyOptions({
+                    autoscaleInfoProvider: (baseImplementation) => {
+                        const res = baseImplementation();
+                        return res !== null ? res : null;
+                    }
+                });
+            }
             // Reset zoom (barSpacing) and right margin
-            chartData.chart.timeScale().applyOptions({ rightOffset: 3, barSpacing: 8 });
+            chartData.chart.timeScale().applyOptions({ rightOffset: 7, barSpacing: 8 });
             chartData.chart.timeScale().scrollToRealTime(); // Jump to newest candle
             chartData.chart.priceScale('right').applyOptions({ autoScale: true });
         }
@@ -795,7 +807,7 @@ function initializeChart(chartData) {
             secondsVisible: false,
             borderColor: themeOptions.timeScale.borderColor,
             tickMarkFormatter: TimeUtils.formatAxis,
-            rightOffset: 3,
+            rightOffset: 7,
             barSpacing: 8,
             shiftVisibleRangeOnNewBar: true,
         },
@@ -814,8 +826,7 @@ function initializeChart(chartData) {
         // Enable all native user interactions. These are defaults but are made explicit here.
         handleScroll: {
             mouseWheel: false, // Must be false! If true, it overrides zooming and pans instead.
-            pressedMouseMove: { time: true, price: true }, // Allow panning in both directions
-            pressedMouseMove: true, // Panning
+            pressedMouseMove: true, // Allow panning
             horzTouchDrag: true,
             vertTouchDrag: true,
         },
@@ -835,44 +846,6 @@ function initializeChart(chartData) {
     container.appendChild(deleteBtn);
     chartData.hoverDeleteBtn = deleteBtn;
 
-    deleteBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const id = chartData.hoveredLineId;
-        if (!id) return;
-        const key = chartData.symbol;
-        const lines = state.drawings[key];
-        if (lines) {
-            const idx = lines.findIndex(l => l.id === id);
-            if (idx !== -1) {
-                const lineType = lines[idx].type;
-                Object.values(state.charts).forEach(cd => {
-                    if (cd.symbol === chartData.symbol) {
-                        if (lineType === 'verticalLine') {
-                            const el = document.getElementById(`vline-${cd.id}-${id}`);
-                            if (el) el.remove();
-                        } else {
-                            const pl = cd.renderedDrawings[id];
-                            if (pl) {
-                                if (pl instanceof HTMLElement) {
-                                    pl.remove();
-                                } else {
-                                    try { cd.candleSeries.removePriceLine(pl); } catch(err){}
-                                }
-                                delete cd.renderedDrawings[id];
-                            }
-                        }
-                        updateMarkers(cd);
-                    }
-                });
-                lines.splice(idx, 1);
-                saveDrawings();
-            }
-        }
-        deleteBtn.style.display = 'none';
-        container.classList.remove('hovering-hline');
-        container.classList.remove('hovering-vline');
-    });
-
     const addAlertBtn = document.createElement('div');
     addAlertBtn.className = 'hover-add-alert-btn';
     addAlertBtn.innerHTML = '＋';
@@ -880,14 +853,6 @@ function initializeChart(chartData) {
     addAlertBtn.title = 'Add Alert';
     container.appendChild(addAlertBtn);
     chartData.hoverAddAlertBtn = addAlertBtn;
-
-    addAlertBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        if (chartData.lastHoveredPrice !== null) {
-            openPriceAlertModal(chartData, chartData.lastHoveredPrice);
-        }
-        addAlertBtn.style.display = 'none';
-    });
 
     let isDragging = false;
     let draggingLineInfo = null;
@@ -946,7 +911,18 @@ function initializeChart(chartData) {
         if (!isDragging && window.paperTrading) {
             const checkItem = (item, isOrder) => {
                 if (item.symbol !== chartData.symbol) return false;
-                if (!isOrder && window.paperTrading.activeTPSLIds && !window.paperTrading.activeTPSLIds.has(item.id)) return false;
+                
+                if (isOrder && item.price !== null && item.price !== undefined) {
+                    const lineY = chartData.candleSeries.priceToCoordinate(item.price);
+                    if (lineY !== null && Math.abs(y - lineY) < 15) {
+                        isDragging = true;
+                        draggingLineInfo = { isPT: true, id: item.id, type: 'price', isOrder: isOrder, startY: y };
+                        chartData.chart.applyOptions({ handleScroll: { pressedMouseMove: false } });
+                        return true;
+                    }
+                }
+                
+                if (window.paperTrading.activeTPSLIds && !window.paperTrading.activeTPSLIds.has(item.id)) return false;
                 if (item.tp !== null && item.tp !== undefined) {
                     const lineY = chartData.candleSeries.priceToCoordinate(item.tp);
                     if (lineY !== null && Math.abs(y - lineY) < 15) {
@@ -970,12 +946,60 @@ function initializeChart(chartData) {
             for (let pos of window.paperTrading.positions.positions) if (checkItem(pos, false)) break;
             if (!isDragging) for (let order of window.paperTrading.positions.orders) if (checkItem(order, true)) break;
         }
+        
+        if (!isDragging) {
+            let rightScaleWidth = 55;
+            try { const w = chartData.chart.priceScale('right').width(); if (w > 10 && w < 150) rightScaleWidth = w; } catch(err) {}
+            if (x < rect.width - rightScaleWidth) {
+                chartData.verticalPanArmed = true;
+                chartData.panStartX = x;
+                chartData.panStartY = y;
+                chartData.isVerticalPanning = false;
+            }
+        }
     }, { capture: true });
 
     container.addEventListener('mousemove', (e) => {
         const rect = container.getBoundingClientRect();
         const x = e.clientX - rect.left;
         const y = e.clientY - rect.top;
+
+        if (chartData.verticalPanArmed) {
+            const dx = Math.abs(x - chartData.panStartX);
+            const dy = Math.abs(y - chartData.panStartY);
+            if (dy > 5 && dy > dx) {
+                chartData.isVerticalPanning = true;
+                chartData.verticalPanArmed = false;
+                chartData.panStartPrice = chartData.candleSeries.coordinateToPrice(y);
+            } else if (dx > 5) {
+                chartData.verticalPanArmed = false;
+            }
+        }
+
+        if (chartData.isVerticalPanning && chartData.panStartPrice !== null) {
+            const currentPrice = chartData.candleSeries.coordinateToPrice(y);
+            if (currentPrice !== null) {
+                chartData.chart.priceScale('right').applyOptions({ autoScale: true });
+                const deltaPrice = chartData.panStartPrice - currentPrice;
+                chartData.customPriceOffset = (chartData.customPriceOffset || 0) + deltaPrice;
+                
+                chartData.candleSeries.applyOptions({
+                    autoscaleInfoProvider: (baseImplementation) => {
+                        const res = baseImplementation();
+                        if (res !== null) {
+                            return {
+                                priceRange: {
+                                    minValue: res.priceRange.minValue + chartData.customPriceOffset,
+                                    maxValue: res.priceRange.maxValue + chartData.customPriceOffset,
+                                },
+                                margins: res.margins || undefined,
+                            };
+                        }
+                        return null;
+                    }
+                });
+            }
+        }
 
         // Handle dragging updates
         if (isDragging && draggingLineInfo) {
@@ -988,6 +1012,7 @@ function initializeChart(chartData) {
                     if (item) {
                         if (draggingLineInfo.type === 'tp') item.tp = newPrice;
                         if (draggingLineInfo.type === 'sl') item.sl = newPrice;
+                        if (draggingLineInfo.type === 'price') item.price = newPrice;
                         
                         Object.values(state.charts).forEach(cd => {
                             if (cd.symbol === chartData.symbol && cd.ptLineObjects) {
@@ -1116,7 +1141,18 @@ function initializeChart(chartData) {
         if (!hoveredLine && window.paperTrading && hoverPrice !== null) {
             const checkPTHover = (item, isOrder) => {
                 if (item.symbol !== chartData.symbol) return false;
-                if (!isOrder && window.paperTrading.activeTPSLIds && !window.paperTrading.activeTPSLIds.has(item.id)) return false;
+                
+                if (isOrder && item.price !== null && item.price !== undefined) {
+                    const lineY = chartData.candleSeries.priceToCoordinate(item.price);
+                    if (lineY !== null && Math.abs(y - lineY) < 15) {
+                        hoveredLine = { id: item.id, type: 'price' };
+                        hoveredLineY = lineY;
+                        hoveredIsPT = true;
+                        return true;
+                    }
+                }
+                
+                if (window.paperTrading.activeTPSLIds && !window.paperTrading.activeTPSLIds.has(item.id)) return false;
                 if (item.tp !== null && item.tp !== undefined) {
                     const lineY = chartData.candleSeries.priceToCoordinate(item.tp);
                     if (lineY !== null && Math.abs(y - lineY) < 15) {
@@ -1198,9 +1234,40 @@ function initializeChart(chartData) {
                 if (chartData.hoverAddAlertBtn) chartData.hoverAddAlertBtn.style.display = 'none';
             }
         }
+
+        let overBtn = false;
+        if (chartData.hoverAddAlertBtn && chartData.hoverAddAlertBtn.style.display !== 'none') {
+            const bLeft = parseFloat(chartData.hoverAddAlertBtn.style.left);
+            const bTop = parseFloat(chartData.hoverAddAlertBtn.style.top);
+            if (x >= bLeft && x <= bLeft + 18 && y >= bTop && y <= bTop + 18) {
+                chartData.hoverAddAlertBtn.classList.add('hovered');
+                overBtn = true;
+            } else {
+                chartData.hoverAddAlertBtn.classList.remove('hovered');
+            }
+        }
+        if (chartData.hoverDeleteBtn && chartData.hoverDeleteBtn.style.display !== 'none') {
+            const bLeft = parseFloat(chartData.hoverDeleteBtn.style.left);
+            const bTop = parseFloat(chartData.hoverDeleteBtn.style.top);
+            if (x >= bLeft && x <= bLeft + 18 && y >= bTop && y <= bTop + 18) {
+                chartData.hoverDeleteBtn.classList.add('hovered');
+                overBtn = true;
+            } else {
+                chartData.hoverDeleteBtn.classList.remove('hovered');
+            }
+        }
+        
+        if (overBtn) container.classList.add('hovering-btn');
+        else container.classList.remove('hovering-btn');
     });
 
     const finishDrag = (e) => {
+        chartData.verticalPanArmed = false;
+        if (chartData.isVerticalPanning) {
+            chartData.isVerticalPanning = false;
+            chartData.panStartPrice = null;
+        }
+
         if (isDragging) {
             isDragging = false;
             if (draggingLineInfo && draggingLineInfo.isPT && window.paperTrading) {
@@ -1210,7 +1277,6 @@ function initializeChart(chartData) {
                 saveDrawings();
             }
             // Re-enable panning
-            chartData.chart.applyOptions({ handleScroll: { pressedMouseMove: { time: true, price: true } } });
             chartData.chart.applyOptions({ handleScroll: { pressedMouseMove: true } });
             if (chartData.justDragged) {
                 setTimeout(() => chartData.justDragged = false, 50);
@@ -1253,7 +1319,70 @@ function initializeChart(chartData) {
         if (chartData.hoverAddAlertBtn) chartData.hoverAddAlertBtn.style.display = 'none';
         container.classList.remove('hovering-hline');
         container.classList.remove('hovering-vline');
+        container.classList.remove('hovering-btn');
     });
+
+    container.addEventListener('click', (e) => {
+        if (!chartData.candleSeries || !chartData.chart) return;
+        const rect = container.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+            
+            if (chartData.hoverAddAlertBtn && chartData.hoverAddAlertBtn.style.display !== 'none') {
+                const bLeft = parseFloat(chartData.hoverAddAlertBtn.style.left);
+                const bTop = parseFloat(chartData.hoverAddAlertBtn.style.top);
+                if (x >= bLeft && x <= bLeft + 18 && y >= bTop && y <= bTop + 18) {
+                    if (chartData.lastHoveredPrice !== null) {
+                        openPriceAlertModal(chartData, chartData.lastHoveredPrice);
+                    }
+                    chartData.hoverAddAlertBtn.style.display = 'none';
+                    e.stopPropagation();
+                    return;
+                }
+            }
+            
+            if (chartData.hoverDeleteBtn && chartData.hoverDeleteBtn.style.display !== 'none') {
+                const bLeft = parseFloat(chartData.hoverDeleteBtn.style.left);
+                const bTop = parseFloat(chartData.hoverDeleteBtn.style.top);
+                if (x >= bLeft && x <= bLeft + 18 && y >= bTop && y <= bTop + 18) {
+                    const id = chartData.hoveredLineId;
+                    if (id) {
+                        const key = chartData.symbol;
+                        const lines = state.drawings[key];
+                        if (lines) {
+                            const idx = lines.findIndex(l => l.id === id);
+                            if (idx !== -1) {
+                                const lineType = lines[idx].type;
+                                Object.values(state.charts).forEach(cd => {
+                                    if (cd.symbol === chartData.symbol) {
+                                        if (lineType === 'verticalLine') {
+                                            const el = document.getElementById(`vline-${cd.id}-${id}`);
+                                            if (el) el.remove();
+                                        } else {
+                                            const pl = cd.renderedDrawings[id];
+                                            if (pl) {
+                                                if (pl instanceof HTMLElement) { pl.remove(); }
+                                                else { try { cd.candleSeries.removePriceLine(pl); } catch(err){} }
+                                                delete cd.renderedDrawings[id];
+                                            }
+                                        }
+                                        updateMarkers(cd);
+                                    }
+                                });
+                                lines.splice(idx, 1);
+                                saveDrawings();
+                            }
+                        }
+                    }
+                    chartData.hoverDeleteBtn.style.display = 'none';
+                    container.classList.remove('hovering-hline');
+                    container.classList.remove('hovering-vline');
+                    container.classList.remove('hovering-btn');
+                    e.stopPropagation();
+                    return;
+                }
+            }
+    }, { capture: true });
 
     container.addEventListener('dblclick', (e) => {
         if (!chartData.candleSeries || !chartData.chart) return;
@@ -1269,6 +1398,17 @@ function initializeChart(chartData) {
             if (price !== null) {
                 openPriceAlertModal(chartData, price);
             }
+        } else {
+            chartData.customPriceOffset = 0;
+            chartData.candleSeries.applyOptions({
+                autoscaleInfoProvider: (baseImplementation) => {
+                    const res = baseImplementation();
+                    return res !== null ? res : null;
+                }
+            });
+            chartData.chart.timeScale().applyOptions({ rightOffset: 7, barSpacing: 8 });
+            chartData.chart.timeScale().scrollToRealTime();
+            chartData.chart.priceScale('right').applyOptions({ autoScale: true });
         }
     });
 
@@ -1425,6 +1565,15 @@ function initializeChart(chartData) {
 }
 
 function resetChart(chartData) {
+    chartData.customPriceOffset = 0;
+    if (chartData.candleSeries) {
+        chartData.candleSeries.applyOptions({
+            autoscaleInfoProvider: (baseImplementation) => {
+                const res = baseImplementation();
+                return res !== null ? res : null;
+            }
+        });
+    }
     chartData.currentCandle = null;
     chartData.lastPrice = null;
     chartData.referencePrice = null;
@@ -1564,7 +1713,7 @@ function openLineSettingsModal(chartData, lineObj, key) {
             <h3>Horizontal Line Settings</h3>
             <div class="settings-group">
                 <label>Price</label>
-                <input type="number" id="line-price-input" value="${lineObj.price}" step="0.01">
+                <input type="number" id="line-price-input" value="${lineObj.price}" step="any">
             </div>
             <div class="settings-group">
                 <label>Color</label>
@@ -1942,7 +2091,7 @@ function openPriceAlertModal(chartData, defaultPrice) {
             <h3>Create Price Alert</h3>
             <div class="settings-group">
                 <label>Price</label>
-                <input type="number" id="alert-price-input" value="${defaultPrice.toFixed(2)}" step="0.01">
+                <input type="number" id="alert-price-input" value="${defaultPrice < 1 ? defaultPrice.toPrecision(4) : defaultPrice.toFixed(2)}" step="any">
             </div>
             <div class="settings-actions">
                 <button id="alert-cancel-btn" style="background: #394654; color: white;">Cancel</button>
@@ -1997,7 +2146,7 @@ function openAlertSettingsModal(chartData, alertObj, key) {
             <h3>Edit Price Alert</h3>
             <div class="settings-group">
                 <label>Price</label>
-                <input type="number" id="edit-alert-price" value="${alertObj.price}" step="0.01">
+                <input type="number" id="edit-alert-price" value="${alertObj.price}" step="any">
             </div>
             <div class="settings-actions">
                 <button id="edit-alert-delete" style="background: #ef4444; color: white; margin-right: auto;">Delete</button>
@@ -2114,6 +2263,29 @@ function showNotification(title, body) {
     }, 5000);
 }
 
+function updateChartPriceFormat(chartData, currentPrice) {
+    if (!currentPrice) return;
+    let precision = 2;
+    let minMove = 0.01;
+    
+    const absPrice = Math.abs(currentPrice);
+    if (absPrice < 0.0000001) { precision = 10; minMove = 0.0000000001; }
+    else if (absPrice < 0.00001) { precision = 8; minMove = 0.00000001; }
+    else if (absPrice < 0.001) { precision = 6; minMove = 0.000001; }
+    else if (absPrice < 0.1) { precision = 4; minMove = 0.0001; }
+    else if (absPrice < 10) { precision = 3; minMove = 0.001; }
+    else { precision = 2; minMove = 0.01; }
+
+    const priceFormat = { type: 'price', precision: precision, minMove: minMove };
+    
+    if (chartData.candleSeries) chartData.candleSeries.applyOptions({ priceFormat });
+    if (chartData.smaSeries) chartData.smaSeries.applyOptions({ priceFormat });
+    if (chartData.emaSeries) chartData.emaSeries.applyOptions({ priceFormat });
+    if (chartData.bbUpperSeries) chartData.bbUpperSeries.applyOptions({ priceFormat });
+    if (chartData.bbMiddleSeries) chartData.bbMiddleSeries.applyOptions({ priceFormat });
+    if (chartData.bbLowerSeries) chartData.bbLowerSeries.applyOptions({ priceFormat });
+}
+
 async function loadChartData(chartData) {
     if (chartData.instrumentId === "none") {
         setPaneMessage(chartData.id, "No Chart Selected");
@@ -2129,8 +2301,8 @@ async function loadChartData(chartData) {
             try {
                 const intervalMap = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400 };
                 const seconds = intervalMap[chartData.interval] || 3600;
-                // Request 3000 candles of history from Hyperliquid instead of 500
-                const startTime = Date.now() - (seconds * 3000 * 1000);
+                // Request 5000 candles of history from Hyperliquid (Maximum limit per single API request)
+                const startTime = Date.now() - (seconds * 5000 * 1000);
                 
                 const res = await fetch("https://api.hyperliquid.xyz/info", {
                     method: "POST",
@@ -2214,7 +2386,7 @@ async function loadChartData(chartData) {
         chartData.cachedData = candles;
         syncChartWithCache(chartData);
 
-        chartData.chart.timeScale().applyOptions({ rightOffset: 3, barSpacing: 8 });
+        chartData.chart.timeScale().applyOptions({ rightOffset: 7, barSpacing: 8 });
         chartData.chart.timeScale().scrollToRealTime();
 
         // Let the chart auto-scale perfectly to the data, then unlock the Y-axis
@@ -2226,6 +2398,8 @@ async function loadChartData(chartData) {
         chartData.currentCandle = candles[candles.length - 1];
         chartData.referencePrice = candles.length > 1 ? candles[candles.length - 2].close : chartData.currentCandle.open;
         
+        updateChartPriceFormat(chartData, chartData.currentCandle.close);
+
         const isUp = chartData.currentCandle.close >= chartData.currentCandle.open;
         chartData.lastDirection = isUp ? 'up' : 'down';
         chartData.candleSeries.applyOptions({
@@ -2354,7 +2528,6 @@ function applyPriceUpdate(chartData, tick) {
     const candle = buildRealtimeCandle(chartData, time, price, volume);
     
     // Cache maintenance
-    chartData.isNewBar = false;
     if (chartData.cachedData.length > 0) {
         const last = chartData.cachedData[chartData.cachedData.length - 1];
         if (last.time === candle.time) {
@@ -2609,9 +2782,11 @@ function flushChartUpdate(chartData) {
         const timeScale = chartData.chart.timeScale();
         if (typeof timeScale.scrollPosition === 'function') {
             const pos = timeScale.scrollPosition();
-            if (pos <= 5) shouldShift = true; // Snap if we are hovering near the live edge
+            if (pos <= 5 && pos >= -15) shouldShift = true; // Snap if we are hovering near the live edge
         }
     }
+    
+    chartData.isNewBar = false;
 
     chartData.candleSeries.update(candle);
     
@@ -2748,8 +2923,13 @@ function flashTicker(chartId, direction) {
 }
 
 function formatPrice(price) {
-    if (price >= 1000) return price.toLocaleString(undefined, { maximumFractionDigits: 2 });
-    if (price >= 1) return price.toFixed(2);
+    if (price === null || price === undefined) return "--";
+    const absPrice = Math.abs(price);
+    if (absPrice >= 1000) return price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    if (absPrice >= 1) return price.toFixed(2);
+    if (absPrice >= 0.01) return price.toFixed(4);
+    if (absPrice >= 0.00001) return price.toFixed(6);
+    if (absPrice >= 0.0000001) return price.toFixed(8);
     return price.toPrecision(4);
 }
 
@@ -2812,7 +2992,7 @@ function updateChartCountdown(chartData, now = Date.now()) {
             timerEl.style.width = `${scaleWidth}px`;
         }
 
-    const timerHeight = 32; 
+    const timerHeight = 22; 
     timerEl.style.top = `${y - (timerHeight / 2)}px`;
     
     const priceStr = formatPrice(chartData.lastPrice);
@@ -3523,6 +3703,25 @@ function injectThemeStyles() {
         /* Prevent countdown timer from blocking mouse events on the chart */
         .countdown-timer {
             pointer-events: none;
+            display: flex !important;
+            flex-direction: column !important;
+            justify-content: center !important;
+            align-items: center !important;
+            height: 22px !important;
+            padding: 1px 0 !important;
+            box-sizing: border-box !important;
+            gap: 0px !important;
+        }
+        .countdown-timer span {
+            font-size: 10.5px !important;
+            line-height: 1 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+        }
+        .countdown-timer .timer-val {
+            font-size: 9px !important;
+            line-height: 1 !important;
+            opacity: 0.85 !important;
         }
 
         /* Market Ticker Styles */
@@ -3638,7 +3837,7 @@ function injectThemeStyles() {
             z-index: 100;
             font-size: 10px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.4);
-            pointer-events: auto;
+            pointer-events: none;
             border: 1px solid #394654;
             transition: background-color 0.1s ease, color 0.1s ease, border-color 0.1s ease !important;
             box-sizing: border-box;
@@ -3650,7 +3849,7 @@ function injectThemeStyles() {
             background: #ffffff;
             border-color: #cbd5e1;
         }
-        .hover-delete-btn:hover {
+        .hover-delete-btn:hover, .hover-delete-btn.hovered {
             background: #ef4444;
             color: white;
             border-color: #ef4444;
@@ -3673,7 +3872,7 @@ function injectThemeStyles() {
             z-index: 100;
             font-size: 14px;
             box-shadow: 0 1px 3px rgba(0,0,0,0.4);
-            pointer-events: auto;
+            pointer-events: none;
             border: 1px solid #394654;
             transition: background-color 0.1s ease, color 0.1s ease, border-color 0.1s ease !important;
             box-sizing: border-box;
@@ -3686,7 +3885,7 @@ function injectThemeStyles() {
             background: #ffffff;
             border-color: #cbd5e1;
         }
-        .hover-add-alert-btn:hover {
+        .hover-add-alert-btn:hover, .hover-add-alert-btn.hovered {
             background: #10b981;
             color: white;
             border-color: #10b981;
@@ -3697,6 +3896,10 @@ function injectThemeStyles() {
         }
         .chart-container.hovering-vline,
         .chart-container.hovering-vline * {
+            cursor: pointer !important;
+        }
+        .chart-container.hovering-btn,
+        .chart-container.hovering-btn * {
             cursor: pointer !important;
         }
         .vertical-line-drawing {
@@ -4604,7 +4807,12 @@ function formatCurrency(num) {
     if (num >= 1e9) return '$' + (num / 1e9).toFixed(2) + 'B';
     if (num >= 1e6) return '$' + (num / 1e6).toFixed(2) + 'M';
     if (num >= 1e3) return '$' + (num / 1e3).toFixed(2) + 'K';
-    return '$' + num.toFixed(2);
+    const absNum = Math.abs(num);
+    if (absNum >= 1) return '$' + num.toFixed(2);
+    if (absNum >= 0.01) return '$' + num.toFixed(4);
+    if (absNum >= 0.00001) return '$' + num.toFixed(6);
+    if (absNum >= 0.0000001) return '$' + num.toFixed(8);
+    return '$' + num.toPrecision(4);
 }
 
 function formatNumber(num) {
@@ -4847,6 +5055,15 @@ function renderOrderBook(data) {
     let maxBidSize = 0;
     displayBids.forEach(b => maxBidSize = Math.max(maxBidSize, parseFloat(b.sz)));
 
+    const formatObPrice = (px) => {
+        const p = parseFloat(px);
+        if (p >= 1) return p.toFixed(2);
+        if (p >= 0.01) return p.toFixed(4);
+        if (p >= 0.0001) return p.toFixed(6);
+        if (p >= 0.000001) return p.toFixed(8);
+        return p.toPrecision(4);
+    };
+
     let asksHtml = '';
     displayAsks.forEach(a => {
         const size = parseFloat(a.sz);
@@ -4854,7 +5071,7 @@ function renderOrderBook(data) {
         asksHtml += `
             <div class="ob-row">
                 <div class="ob-bg ob-ask-bg" style="width: ${width}%"></div>
-                <span class="ob-ask-price">${parseFloat(a.px).toFixed(2)}</span>
+                <span class="ob-ask-price">${formatObPrice(a.px)}</span>
                 <span class="ob-size">${size.toFixed(4)}</span>
             </div>
         `;
@@ -4868,7 +5085,7 @@ function renderOrderBook(data) {
         bidsHtml += `
             <div class="ob-row">
                 <div class="ob-bg ob-bid-bg" style="width: ${width}%"></div>
-                <span class="ob-bid-price">${parseFloat(b.px).toFixed(2)}</span>
+                <span class="ob-bid-price">${formatObPrice(b.px)}</span>
                 <span class="ob-size">${size.toFixed(4)}</span>
             </div>
         `;
@@ -4880,7 +5097,7 @@ function renderOrderBook(data) {
         const bestAsk = parseFloat(asks[0].px);
         const spread = bestAsk - bestBid;
         const spreadPercent = (spread / bestAsk) * 100;
-        spreadContainer.innerHTML = `${spread.toFixed(2)} (${spreadPercent.toFixed(3)}%)`;
+        spreadContainer.innerHTML = `${formatObPrice(spread)} (${spreadPercent.toFixed(3)}%)`;
     }
 
     if (!state.obCentered) {

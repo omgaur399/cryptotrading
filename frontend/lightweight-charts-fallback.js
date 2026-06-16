@@ -515,8 +515,13 @@ if (!window.LightweightCharts) {
     }
 
     function formatAxisPrice(price) {
-        if (price >= 1000) return price.toLocaleString(undefined, { maximumFractionDigits: 0 });
-        if (price >= 1) return price.toFixed(2);
+        if (price === null || price === undefined) return "--";
+        const absP = Math.abs(price);
+        if (absP >= 1000) return price.toLocaleString(undefined, { maximumFractionDigits: 0 });
+        if (absP >= 1) return price.toFixed(2);
+        if (absP >= 0.01) return price.toFixed(4);
+        if (absP >= 0.0001) return price.toFixed(6);
+        if (absP >= 0.000001) return price.toFixed(8);
         return price.toPrecision(4);
     }
 
