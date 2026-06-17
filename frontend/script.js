@@ -106,6 +106,7 @@ const state = {
     theme: "dark",
     isSyncingCrosshair: false,
     obCentered: false,
+    replay: null,
 };
 
 document.addEventListener("DOMContentLoaded", initializeApp);
@@ -213,6 +214,14 @@ async function initializeApp() {
         themeBtn.style.marginLeft = "12px";
         themeBtn.onclick = toggleTheme;
         chartCountEl.parentNode.appendChild(themeBtn);
+
+        const replayBtn = document.createElement("button");
+        replayBtn.id = "global-replay-btn";
+        replayBtn.className = "theme-btn";
+        replayBtn.textContent = "⏪ Replay";
+        replayBtn.style.marginLeft = "12px";
+        replayBtn.onclick = toggleReplayMode;
+        chartCountEl.parentNode.appendChild(replayBtn);
     }
 
     connectLiveStream();
@@ -588,7 +597,7 @@ function createChartPane(chartData, index) {
             </div>
         </div>
         <div class="chart-container" id="${chartData.id}-container">
-            <div class="chart-message">Loading</div>
+            <div class="chart-message" style="pointer-events: none;">Loading</div>
             <div class="countdown-timer" id="${chartData.id}-timer"></div>
         </div>
     `;
@@ -790,11 +799,25 @@ function populatePaneControls(chartData) {
 
     updateIntervalOptions(chartData, intervalSelect);
 
-    intervalSelect.addEventListener("change", () => {
+    intervalSelect.addEventListener("change", async () => {
+        const wasReplaying = state.replay && state.replay.active && state.replay.chartId === chartData.id && state.replay.status === 'active';
+        let replayTime = null;
+        if (wasReplaying) {
+            const currentCandle = state.replay.fullData[state.replay.currentIndex];
+            if (currentCandle) replayTime = currentCandle.time;
+            if (state.replay.timer) clearTimeout(state.replay.timer);
+        }
+
         unsubscribeChart(chartData);
         chartData.interval = intervalSelect.value;
         resetChart(chartData);
-        loadChartData(chartData);
+        await loadChartData(chartData);
+        
+        if (wasReplaying) {
+            state.replay.fullData = [...chartData.cachedData];
+            startReplayAt(replayTime);
+        }
+
         saveLayoutState();
     });
 
@@ -1543,6 +1566,13 @@ function initializeChart(chartData) {
     chartData.chart.subscribeClick((param) => {
         if (chartData.justDragged) return; // Ignore native clicks resolving immediately after a drag
         
+        if (state.replay && state.replay.status === 'selecting' && state.replay.chartId === chartData.id) {
+            if (param.time) {
+                startReplayAt(param.time);
+            }
+            return;
+        }
+
         if (!param.point || !chartData.candleSeries) return;
 
         if (chartData.drawingMode) {
@@ -2209,6 +2239,12 @@ window.refreshChartMarkers = () => {
 
 function updateMarkers(chartData) {
     if (!chartData.candleSeries) return;
+    
+    if (state.replay && state.replay.active && state.replay.chartId === chartData.id && state.replay.status === 'active') {
+        updateReplayMarkers();
+        return;
+    }
+
     const key = chartData.symbol;
     const drawings = state.drawings[key] || [];
     
@@ -2752,6 +2788,7 @@ function unsubscribeChart(chartData) {
 function handlePriceUpdate(tick) {
     Object.values(state.charts).forEach(chartData => {
         if (chartData.source !== tick.source || chartData.symbol !== tick.symbol) return;
+        if (state.replay && state.replay.active && state.replay.chartId === chartData.id) return;
         applyPriceUpdate(chartData, tick);
     });
 }
@@ -3215,6 +3252,7 @@ function setPaneMessage(chartId, message) {
     if (!messageEl) {
         messageEl = document.createElement("div");
         messageEl.className = "chart-message";
+        messageEl.style.pointerEvents = "none";
         container.appendChild(messageEl);
     }
     messageEl.textContent = message;
@@ -3367,6 +3405,10 @@ function updateMarketMoverHighlights() {
 function switchChartSymbol(chartId, newSymbol) {
     const chartData = state.charts[chartId];
     if (!chartData || chartData.symbol === newSymbol) return;
+
+    if (state.replay && state.replay.active && state.replay.chartId === chartId) {
+        exitReplayMode();
+    }
 
     if (newSymbol === 'none') {
         if (chartData.instrumentId === 'none') return;
@@ -3956,6 +3998,9 @@ function injectThemeStyles() {
         body.light-theme .chart-message,
         body.light-theme .ticker-symbol {
             color: var(--text-primary);
+        }
+        .chart-message {
+            pointer-events: none;
         }
         .theme-btn {
             background-color: #2a3f5f;
@@ -5563,5 +5608,451 @@ function renderOrderBook(data) {
             scrollContainer.scrollTop = spreadContainer.offsetTop - (scrollContainer.clientHeight / 2) + (spreadContainer.clientHeight / 2);
             state.obCentered = true;
         }
+    }
+}
+
+// --- Market Replay Engine ---
+
+function toggleReplayMode() {
+    if (state.replay && state.replay.active) {
+        exitReplayMode();
+    } else {
+        startReplaySelection();
+    }
+}
+
+function startReplaySelection() {
+    const activeChart = state.charts[state.activeChartId];
+    if (!activeChart || !activeChart.cachedData || activeChart.cachedData.length === 0) {
+        alert("Please load a chart first.");
+        return;
+    }
+    
+    document.getElementById("global-replay-btn").textContent = "Cancel Replay";
+    
+    state.replay = {
+        active: true,
+        status: 'selecting',
+        chartId: state.activeChartId,
+        speed: 1, 
+        isPlaying: false,
+        timer: null,
+        fullData: [...activeChart.cachedData],
+        currentIndex: -1,
+        paper: {
+            balance: 100000,
+            initialBalance: 100000,
+            positions: [],
+            history: []
+        }
+    };
+    
+    const container = document.getElementById(`${activeChart.id}-container`);
+    container.style.cursor = "crosshair";
+    
+    setPaneMessage(activeChart.id, "Click on any historical candle to start replay from there");
+}
+
+function startReplayAt(time) {
+    const chartData = state.charts[state.replay.chartId];
+    clearPaneMessage(chartData.id);
+    
+    const container = document.getElementById(`${chartData.id}-container`);
+    container.style.cursor = "default";
+    
+    let msTime = typeof time === 'object' ? TimeUtils._getMs(time) / 1000 : time;
+    
+    let idx = state.replay.fullData.findIndex(c => c.time === msTime);
+    if (idx === -1) {
+        idx = state.replay.fullData.findIndex(c => c.time >= msTime);
+        if (idx === -1) idx = 0;
+    }
+    
+    state.replay.currentIndex = idx;
+    state.replay.status = 'active';
+    
+    unsubscribeChart(chartData);
+    
+    buildReplayUI();
+    renderReplayFrame();
+    document.getElementById("global-replay-btn").textContent = "Exit Replay";
+}
+
+function buildReplayUI() {
+    let panel = document.getElementById("replay-toolbar");
+    if (!panel) {
+        panel = document.createElement("div");
+        panel.id = "replay-toolbar";
+        panel.style.cssText = `
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: #1e293b;
+            border: 1px solid #3b82f6;
+            padding: 10px 16px;
+            border-radius: 8px;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            color: white;
+            font-family: inherit;
+        `;
+        document.body.appendChild(panel);
+    }
+    
+    panel.innerHTML = `
+        <button id="replay-play" class="theme-btn" style="background: #10b981; border: none; padding: 6px 12px;">▶ Play</button>
+        <button id="replay-pause" class="theme-btn" style="background: #f59e0b; border: none; padding: 6px 12px; display: none;">⏸ Pause</button>
+        <button id="replay-step-back" class="theme-btn" title="Step Back">⏮</button>
+        <button id="replay-step-fwd" class="theme-btn" title="Step Forward">⏭</button>
+        <button id="replay-jump-back" class="theme-btn" title="Jump Back 10">-10</button>
+        <button id="replay-jump-fwd" class="theme-btn" title="Jump Forward 10">+10</button>
+        <select id="replay-speed" class="theme-btn" title="Replay Speed">
+            <option value="0.25">0.25x</option>
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="5">5x</option>
+            <option value="10">10x</option>
+            <option value="25">25x</option>
+            <option value="50">50x</option>
+        </select>
+        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 4px;"></div>
+        <button id="replay-buy" class="theme-btn" style="background: #10b981; border: none;">Buy / Long</button>
+        <button id="replay-sell" class="theme-btn" style="background: #ef4444; border: none;">Sell / Short</button>
+        <button id="replay-close" class="theme-btn" style="background: #394654; border: none;">Close Pos</button>
+        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 4px;"></div>
+        <div style="display: flex; flex-direction: column; font-size: 11px;">
+            <span style="color:#8b9bb0">OHM: <span id="replay-bal" style="color:white;font-weight:bold;">100,000</span></span>
+            <span style="color:#8b9bb0">PnL: <span id="replay-pnl" style="font-weight:bold;">0.00</span></span>
+        </div>
+        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 4px;"></div>
+        <button id="replay-stats-toggle" class="theme-btn" style="background: #3b82f6; border: none;">📊 Stats</button>
+        <button id="replay-exit" class="theme-btn" style="background: #ef4444; border: none;">Exit</button>
+    `;
+    
+    document.getElementById("replay-play").onclick = () => {
+        state.replay.isPlaying = true;
+        document.getElementById("replay-play").style.display = "none";
+        document.getElementById("replay-pause").style.display = "inline-block";
+        runReplayLoop();
+    };
+    
+    document.getElementById("replay-pause").onclick = () => {
+        state.replay.isPlaying = false;
+        document.getElementById("replay-play").style.display = "inline-block";
+        document.getElementById("replay-pause").style.display = "none";
+        if (state.replay.timer) clearTimeout(state.replay.timer);
+    };
+    
+    document.getElementById("replay-step-back").onclick = () => { stepReplay(-1); };
+    document.getElementById("replay-step-fwd").onclick = () => { stepReplay(1); };
+    document.getElementById("replay-jump-back").onclick = () => { stepReplay(-10); };
+    document.getElementById("replay-jump-fwd").onclick = () => { stepReplay(10); };
+    
+    document.getElementById("replay-speed").onchange = (e) => {
+        state.replay.speed = parseFloat(e.target.value);
+    };
+    
+    document.getElementById("replay-buy").onclick = () => { executeReplayTrade('Long'); };
+    document.getElementById("replay-sell").onclick = () => { executeReplayTrade('Short'); };
+    document.getElementById("replay-close").onclick = () => { closeAllReplayTrades(); };
+    
+    document.getElementById("replay-stats-toggle").onclick = () => {
+        const p = document.getElementById("replay-analytics-panel");
+        if (p) p.style.display = p.style.display === "none" ? "block" : "none";
+    };
+    
+    document.getElementById("replay-exit").onclick = exitReplayMode;
+    
+    updateReplayAnalyticsPanel();
+}
+
+function runReplayLoop() {
+    if (!state.replay || !state.replay.isPlaying) return;
+    
+    if (state.replay.currentIndex >= state.replay.fullData.length - 1) {
+        document.getElementById("replay-pause").click();
+        alert("End of historical data reached.");
+        return;
+    }
+    
+    stepReplay(1);
+    
+    const interval = 1000 / state.replay.speed;
+    state.replay.timer = setTimeout(runReplayLoop, interval);
+}
+
+function stepReplay(steps) {
+    if (!state.replay) return;
+    let newIndex = state.replay.currentIndex + steps;
+    if (newIndex < 0) newIndex = 0;
+    if (newIndex >= state.replay.fullData.length) newIndex = state.replay.fullData.length - 1;
+    
+    state.replay.currentIndex = newIndex;
+    renderReplayFrame();
+}
+
+function renderReplayFrame() {
+    const chartData = state.charts[state.replay.chartId];
+    if (!chartData) return;
+    
+    const visibleData = state.replay.fullData.slice(0, state.replay.currentIndex + 1);
+    
+    chartData.cachedData = visibleData;
+    chartData.currentCandle = visibleData[visibleData.length - 1];
+    
+    syncChartWithCache(chartData);
+    updateReplayMarkers();
+    updateReplayStatsUI();
+}
+
+function executeReplayTrade(direction) {
+    if (!state.replay) return;
+    const currentCandle = state.replay.fullData[state.replay.currentIndex];
+    if (!currentCandle) return;
+    
+    const price = currentCandle.close;
+    const size = (state.replay.paper.balance * 0.1) / price; 
+    
+    const pos = {
+        id: Date.now().toString(),
+        direction: direction,
+        entryPrice: price,
+        size: size,
+        entryTime: currentCandle.time
+    };
+    
+    state.replay.paper.positions.push(pos);
+    updateReplayMarkers();
+    updateReplayStatsUI();
+}
+
+function closeAllReplayTrades() {
+    if (!state.replay || state.replay.paper.positions.length === 0) return;
+    
+    const currentCandle = state.replay.fullData[state.replay.currentIndex];
+    const price = currentCandle.close;
+    
+    state.replay.paper.positions.forEach(pos => {
+        const isLong = pos.direction === 'Long';
+        const pnl = isLong ? (price - pos.entryPrice) * pos.size : (pos.entryPrice - price) * pos.size;
+        
+        state.replay.paper.balance += pnl;
+        
+        pos.exitPrice = price;
+        pos.exitTime = currentCandle.time;
+        pos.pnl = pnl;
+        
+        state.replay.paper.history.push(pos);
+        
+        const chartData = state.charts[state.replay.chartId];
+        if (chartData && chartData.chart) {
+            const lineSeries = chartData.chart.addLineSeries({
+                color: pnl >= 0 ? '#10b981' : '#ef4444',
+                lineWidth: 2,
+                lastValueVisible: false,
+                priceLineVisible: false,
+                crosshairMarkerVisible: false,
+                lineStyle: 2
+            });
+            lineSeries.setData([
+                { time: pos.entryTime, value: pos.entryPrice },
+                { time: pos.exitTime, value: pos.exitPrice }
+            ]);
+            if (!chartData.replayLines) chartData.replayLines = [];
+            chartData.replayLines.push(lineSeries);
+        }
+    });
+    
+    state.replay.paper.positions = [];
+    updateReplayMarkers();
+    updateReplayStatsUI();
+}
+
+function updateReplayMarkers() {
+    const chartData = state.charts[state.replay.chartId];
+    if (!chartData || !chartData.candleSeries) return;
+    
+    const markers = [];
+    
+    const key = chartData.symbol;
+    const drawings = state.drawings[key] || [];
+    drawings.forEach(d => {
+        if (d.type === 'buyMarker') {
+            markers.push({ time: d.time, position: 'belowBar', color: '#16a34a', shape: 'arrowUp', text: 'BUY', id: d.id });
+        } else if (d.type === 'sellMarker') {
+            markers.push({ time: d.time, position: 'aboveBar', color: '#dc2626', shape: 'arrowDown', text: 'SELL', id: d.id });
+        }
+    });
+    
+    state.replay.paper.positions.forEach(pos => {
+        markers.push({
+            time: pos.entryTime,
+            position: pos.direction === 'Long' ? 'belowBar' : 'aboveBar',
+            color: '#3b82f6',
+            shape: pos.direction === 'Long' ? 'arrowUp' : 'arrowDown',
+            text: `R-ENTRY (${pos.direction})`
+        });
+    });
+    
+    state.replay.paper.history.forEach(pos => {
+        markers.push({
+            time: pos.entryTime,
+            position: pos.direction === 'Long' ? 'belowBar' : 'aboveBar',
+            color: '#3b82f6',
+            shape: pos.direction === 'Long' ? 'arrowUp' : 'arrowDown',
+            text: `R-ENTRY`
+        });
+        markers.push({
+            time: pos.exitTime,
+            position: pos.pnl >= 0 ? 'aboveBar' : 'belowBar',
+            color: pos.pnl >= 0 ? '#10b981' : '#ef4444',
+            shape: pos.pnl >= 0 ? 'arrowUp' : 'arrowDown',
+            text: `R-EXIT`
+        });
+    });
+    
+    markers.sort((a, b) => a.time - b.time);
+    
+    const currentCandle = state.replay.fullData[state.replay.currentIndex];
+    if (currentCandle) {
+        const filteredMarkers = markers.filter(m => m.time <= currentCandle.time);
+        chartData.candleSeries.setMarkers(filteredMarkers);
+    } else {
+        chartData.candleSeries.setMarkers(markers);
+    }
+}
+
+function updateReplayStatsUI() {
+    if (!state.replay) return;
+    
+    let openPnl = 0;
+    const currentCandle = state.replay.fullData[state.replay.currentIndex];
+    if (currentCandle) {
+        const price = currentCandle.close;
+        state.replay.paper.positions.forEach(pos => {
+            const pnl = pos.direction === 'Long' ? (price - pos.entryPrice) * pos.size : (pos.entryPrice - price) * pos.size;
+            openPnl += pnl;
+        });
+    }
+    
+    const balEl = document.getElementById("replay-bal");
+    const pnlEl = document.getElementById("replay-pnl");
+    
+    if (balEl && pnlEl) {
+        balEl.textContent = `${state.replay.paper.balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        pnlEl.textContent = `${openPnl >= 0 ? '+' : ''}${openPnl.toFixed(2)}`;
+        pnlEl.style.color = openPnl >= 0 ? '#10b981' : '#ef4444';
+    }
+    
+    updateReplayAnalyticsPanel(openPnl);
+}
+
+function updateReplayAnalyticsPanel(openPnl = 0) {
+    let panel = document.getElementById("replay-analytics-panel");
+    if (!panel) {
+        panel = document.createElement("div");
+        panel.id = "replay-analytics-panel";
+        panel.style.cssText = `
+            position: fixed;
+            top: 60px;
+            right: 20px;
+            width: 250px;
+            background: #1e293b;
+            border: 1px solid #3b82f6;
+            border-radius: 8px;
+            padding: 16px;
+            color: white;
+            font-family: inherit;
+            z-index: 1000;
+            display: none;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        `;
+        document.body.appendChild(panel);
+    }
+    
+    const history = state.replay.paper.history;
+    const wins = history.filter(t => t.pnl > 0);
+    const losses = history.filter(t => t.pnl <= 0);
+    
+    const winRate = history.length > 0 ? ((wins.length / history.length) * 100).toFixed(1) : '0.0';
+    
+    let grossWin = 0;
+    let grossLoss = 0;
+    let largestWin = 0;
+    let largestLoss = 0;
+    
+    wins.forEach(w => { grossWin += w.pnl; if (w.pnl > largestWin) largestWin = w.pnl; });
+    losses.forEach(l => { grossLoss += Math.abs(l.pnl); if (l.pnl < largestLoss) largestLoss = l.pnl; });
+    
+    const avgWin = wins.length > 0 ? (grossWin / wins.length) : 0;
+    const avgLoss = losses.length > 0 ? (grossLoss / losses.length) : 0;
+    const profitFactor = grossLoss > 0 ? (grossWin / grossLoss).toFixed(2) : (grossWin > 0 ? '∞' : '0.00');
+    
+    const netPnl = (state.replay.paper.balance - state.replay.paper.initialBalance) + openPnl;
+    const currentEquity = state.replay.paper.balance + openPnl;
+    
+    panel.innerHTML = `
+        <h3 style="margin-top:0; color:#3b82f6; font-size:14px; border-bottom: 1px solid #394654; padding-bottom:8px;">Replay Statistics</h3>
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Starting Balance:</span> <span>${state.replay.paper.initialBalance.toFixed(2)} OHM</span></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Current Equity:</span> <span>${currentEquity.toFixed(2)} OHM</span></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Net PnL:</span> <span style="color:${netPnl>=0?'#10b981':'#ef4444'}">${netPnl>=0?'+':''}${netPnl.toFixed(2)} OHM</span></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Win Rate:</span> <span>${winRate}%</span></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Total Trades:</span> <span>${history.length}</span></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Average Win:</span> <span style="color:#10b981">+${avgWin.toFixed(2)}</span></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Average Loss:</span> <span style="color:#ef4444">-${Math.abs(avgLoss).toFixed(2)}</span></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Largest Win:</span> <span style="color:#10b981">+${largestWin.toFixed(2)}</span></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Largest Loss:</span> <span style="color:#ef4444">-${Math.abs(largestLoss).toFixed(2)}</span></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Profit Factor:</span> <span>${profitFactor}</span></div>
+    `;
+}
+
+function exitReplayMode() {
+    if (!state.replay) return;
+    
+    if (state.replay.timer) clearTimeout(state.replay.timer);
+    
+    let chartToUpdate = null;
+
+    if (state.replay.status === 'selecting') {
+        const chartData = state.charts[state.replay.chartId];
+        if (chartData) {
+            const container = document.getElementById(`${chartData.id}-container`);
+            container.style.cursor = "default";
+            clearPaneMessage(chartData.id);
+        }
+    } else if (state.replay.status === 'active') {
+        const chartData = state.charts[state.replay.chartId];
+        if (chartData) {
+            chartData.cachedData = state.replay.fullData;
+            syncChartWithCache(chartData);
+            subscribeChart(chartData);
+            
+            if (chartData.replayLines) {
+                chartData.replayLines.forEach(line => {
+                    try { chartData.chart.removeSeries(line); } catch(e){}
+                });
+            }
+            chartData.replayLines = [];
+            chartToUpdate = chartData;
+        }
+    }
+    
+    const panel = document.getElementById("replay-toolbar");
+    if (panel) panel.remove();
+    
+    const statsPanel = document.getElementById("replay-analytics-panel");
+    if (statsPanel) statsPanel.remove();
+    
+    state.replay = null;
+    document.getElementById("global-replay-btn").textContent = "⏪ Replay";
+
+    if (chartToUpdate) {
+        updateMarkers(chartToUpdate);
+        chartToUpdate.chart.timeScale().scrollToRealTime();
     }
 }
