@@ -436,9 +436,17 @@ if (!window.LightweightCharts) {
                 
                 if (this.options.priceScaleId === 'rsi') {
                     const plotHeight = Math.max(this.chart.height - plot.top - plot.bottom, 120);
-                    const rsiTop = plot.top + plotHeight * 0.8;
+                    const rsiTop = plot.top + plotHeight * 0.85;
                     const rsiBottom = plot.top + plotHeight;
                     seriesScaleY = val => rsiBottom - ((val / 100) * (rsiBottom - rsiTop));
+                } else if (this.options.priceScaleId === 'atr') {
+                    const plotHeight = Math.max(this.chart.height - plot.top - plot.bottom, 120);
+                    const atrTop = plot.top + plotHeight * 0.85;
+                    const atrBottom = plot.top + plotHeight;
+                    let maxAtr = -Infinity, minAtr = Infinity;
+                    this.data.forEach(p => { maxAtr = Math.max(maxAtr, p.value); minAtr = Math.min(minAtr, p.value); });
+                    const range = maxAtr - minAtr || 1;
+                    seriesScaleY = val => atrBottom - (((val - minAtr) / range) * (atrBottom - atrTop));
                 }
                 
                 if (this.priceLines && this.priceLines.length > 0) {

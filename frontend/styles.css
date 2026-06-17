@@ -207,6 +207,10 @@ select {
     cursor: pointer;
 }
 
+.chart-type-select {
+    width: 65px;
+}
+
 .symbol-select-container {
     position: relative;
     width: 65px;
@@ -312,6 +316,11 @@ select {
 .layout-8 .symbol-select-container {
     width: 55px;
     height: 18px;
+}
+
+.layout-6 .chart-type-select,
+.layout-8 .chart-type-select {
+    width: 48px;
 }
 
 .layout-6 .interval-select,

@@ -50,7 +50,7 @@ function getAssetName(sym) {
 }
 
 const TimeUtils = {
-    timeZone: "Asia/Kolkata",
+    timeZone: localStorage.getItem("trading-dashboard-tz") || Intl.DateTimeFormat().resolvedOptions().timeZone,
 
     _getMs: (time) => {
         // Lightweight Charts may pass a BusinessDay object for 1d+ timeframes or Unix timestamps (seconds)
@@ -62,6 +62,7 @@ const TimeUtils = {
 
     formatTooltip: (time) => {
         const date = new Date(TimeUtils._getMs(time));
+        const tzName = TimeUtils.timeZone === "UTC" ? "UTC" : (TimeUtils.timeZone === "America/New_York" ? "EST" : (TimeUtils.timeZone === "Asia/Kolkata" ? "IST" : "Local"));
         return date.toLocaleString("en-IN", {
             timeZone: TimeUtils.timeZone,
             year: "numeric",
@@ -70,7 +71,7 @@ const TimeUtils = {
             hour: "2-digit",
             minute: "2-digit",
             hour12: false,
-        }) + " (IST)";
+        }) + " (" + tzName + ")";
     },
 
     formatAxis: (time, tickMarkType) => {
@@ -87,7 +88,8 @@ const TimeUtils = {
     },
 
     getCurrentTime: () => {
-        return new Date().toLocaleTimeString("en-IN", { timeZone: TimeUtils.timeZone, hour12: true }) + " (IST)";
+        const tzName = TimeUtils.timeZone === "UTC" ? "UTC" : (TimeUtils.timeZone === "America/New_York" ? "EST" : (TimeUtils.timeZone === "Asia/Kolkata" ? "IST" : "Local"));
+        return new Date().toLocaleTimeString("en-IN", { timeZone: TimeUtils.timeZone, hour12: true }) + " (" + tzName + ")";
     }
 };
 
@@ -180,6 +182,30 @@ async function initializeApp() {
         });
         chartCountEl.parentNode.appendChild(toolsSelect);
 
+        const tzSelect = document.createElement("select");
+        tzSelect.id = "global-tz-select";
+        tzSelect.className = "theme-btn";
+        tzSelect.style.marginLeft = "12px";
+        const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+        tzSelect.innerHTML = `
+            <option value="${localTz}">Local</option>
+            <option value="UTC">UTC</option>
+            <option value="America/New_York">EST</option>
+            <option value="Asia/Kolkata">IST</option>
+        `;
+        tzSelect.value = TimeUtils.timeZone;
+        if (!tzSelect.value) tzSelect.value = localTz;
+        
+        tzSelect.addEventListener("change", (e) => {
+            TimeUtils.timeZone = e.target.value;
+            localStorage.setItem("trading-dashboard-tz", e.target.value);
+            Object.values(state.charts).forEach(chartData => {
+                if (chartData.chart) chartData.chart.applyOptions({ localization: { timeFormatter: TimeUtils.formatTooltip } });
+            });
+            updateTimestamp();
+        });
+        chartCountEl.parentNode.appendChild(tzSelect);
+
         const themeBtn = document.createElement("button");
         themeBtn.id = "theme-toggle";
         themeBtn.className = "theme-btn";
@@ -247,6 +273,7 @@ function saveLayoutState() {
         layout[chartData.id] = {
             symbol: chartData.symbol,
             interval: chartData.interval,
+            chartType: chartData.chartType,
             indicators: chartData.indicators
         };
     });
@@ -424,6 +451,13 @@ function renderGrid() {
         targetIndicators.rsiPeriod = targetIndicators.rsiPeriod || 14;
         targetIndicators.rsiColor = targetIndicators.rsiColor || '#8b5cf6';
         targetIndicators.rsiLineWidth = targetIndicators.rsiLineWidth || 2;
+        targetIndicators.vwap = targetIndicators.vwap || false;
+        targetIndicators.vwapColor = targetIndicators.vwapColor || '#ff6d00';
+        targetIndicators.vwapLineWidth = targetIndicators.vwapLineWidth || 1;
+        targetIndicators.atr = targetIndicators.atr || false;
+        targetIndicators.atrPeriod = targetIndicators.atrPeriod || 14;
+        targetIndicators.atrColor = targetIndicators.atrColor || '#2962ff';
+        targetIndicators.atrLineWidth = targetIndicators.atrLineWidth || 2;
         
         if (targetSymbol !== "none" && targetSymbol !== "No Chart") {
             const instrument = state.instruments.find(i => i.symbol === targetSymbol) || state.instruments.find(i => i.symbol === defaultConfig.symbol) || state.instruments[0];
@@ -435,6 +469,7 @@ function renderGrid() {
             }
         }
 
+        let targetChartType = savedConfig.chartType || "candles";
         const chartData = {
             id: chartId,
             instrumentId: instrumentId,
@@ -442,6 +477,7 @@ function renderGrid() {
             symbol: symbol,
             interval: interval,
             chart: null,
+            chartType: targetChartType,
             candleSeries: null,
             volumeSeries: null,
             smaSeries: null,
@@ -450,6 +486,8 @@ function renderGrid() {
             bbMiddleSeries: null,
             bbLowerSeries: null,
             rsiSeries: null,
+            vwapSeries: null,
+            atrSeries: null,
             cachedData: [],
             currentCandle: null,
             lastPrice: null,
@@ -505,6 +543,8 @@ function createChartPane(chartData, index) {
     const emaText = chartData.indicators.ema ? "On" : "Off";
     const bbText = chartData.indicators.bb ? "On" : "Off";
     const rsiText = chartData.indicators.rsi ? "On" : "Off";
+    const vwapText = chartData.indicators.vwap ? "On" : "Off";
+    const atrText = chartData.indicators.atr ? "On" : "Off";
 
     pane.innerHTML = `
         <div class="pane-header" id="${chartData.id}-ticker">
@@ -519,6 +559,12 @@ function createChartPane(chartData, index) {
                     <svg class="dropdown-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
                     <div class="custom-select-dropdown"></div>
                 </div>
+                <select class="pane-select chart-type-select" aria-label="Chart Type" title="Chart Type">
+                    <option value="candles">Candles</option>
+                    <option value="heikinAshi">HA</option>
+                    <option value="line">Line</option>
+                    <option value="bar">Bar</option>
+                </select>
                 <select class="pane-select interval-select" aria-label="Timeframe"></select>
                 <select class="pane-select indicator-select" aria-label="Indicators" title="Indicators">
                     <option value="" disabled selected>ƒx</option>
@@ -527,7 +573,12 @@ function createChartPane(chartData, index) {
                     <option value="ema">EMA ${chartData.indicators.emaPeriod} (${emaText})</option>
                     <option value="bb">BB ${chartData.indicators.bbPeriod} (${bbText})</option>
                     <option value="rsi">RSI ${chartData.indicators.rsiPeriod} (${rsiText})</option>
+                    <option value="vwap">VWAP (${vwapText})</option>
+                    <option value="atr">ATR ${chartData.indicators.atrPeriod} (${atrText})</option>
                 </select>
+                <button class="settings-btn" id="${chartData.id}-screenshot" title="Take Screenshot">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                </button>
                 <button class="settings-btn" id="${chartData.id}-go-live" title="Reset Chart View">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polygon points="5 4 15 12 5 20"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
                 </button>
@@ -611,6 +662,29 @@ function populatePaneControls(chartData) {
             input.select();
         }
     });
+
+    const chartTypeSelect = pane.querySelector(".chart-type-select");
+    if (chartTypeSelect) {
+        chartTypeSelect.value = chartData.chartType || "candles";
+        chartTypeSelect.addEventListener("change", (e) => {
+            chartData.chartType = e.target.value;
+            changeChartType(chartData);
+            saveLayoutState();
+        });
+    }
+
+    const screenshotBtn = pane.querySelector(`#${chartData.id}-screenshot`);
+    if (screenshotBtn) {
+        screenshotBtn.addEventListener("click", () => {
+            if (chartData.chart) {
+                const canvas = chartData.chart.takeScreenshot();
+                const link = document.createElement('a');
+                link.download = `${chartData.symbol !== 'none' ? chartData.symbol : 'chart'}-${chartData.interval}.png`;
+                link.href = canvas.toDataURL('image/png');
+                link.click();
+            }
+        });
+    }
 
     settingsBtn.addEventListener("click", () => openSettingsModal(chartData));
 
@@ -731,6 +805,7 @@ function populatePaneControls(chartData) {
             if (chartData.volumeSeries) {
                 chartData.volumeSeries.applyOptions({ visible: chartData.indicators.volume });
             }
+            updateSubchartMargins(chartData);
             e.target.options[1].text = `Volume (${chartData.indicators.volume ? 'On' : 'Off'})`;
         } else if (indicator === "sma") {
             chartData.indicators.sma = !chartData.indicators.sma;
@@ -769,13 +844,30 @@ function populatePaneControls(chartData) {
             if (chartData.rsiSeries) {
                 if (chartData.indicators.rsi) {
                     chartData.rsiSeries.setData(calculateRSI(chartData.cachedData, chartData.indicators.rsiPeriod));
-                    chartData.chart.priceScale('rsi').applyOptions({
-                        scaleMargins: { top: 0.8, bottom: 0 },
-                    });
                 }
                 chartData.rsiSeries.applyOptions({ visible: chartData.indicators.rsi });
             }
+            updateSubchartMargins(chartData);
             e.target.options[5].text = `RSI ${chartData.indicators.rsiPeriod} (${chartData.indicators.rsi ? 'On' : 'Off'})`;
+        } else if (indicator === "vwap") {
+            chartData.indicators.vwap = !chartData.indicators.vwap;
+            if (chartData.vwapSeries) {
+                if (chartData.indicators.vwap) {
+                    chartData.vwapSeries.setData(calculateVWAP(chartData.cachedData, chartData.interval));
+                }
+                chartData.vwapSeries.applyOptions({ visible: chartData.indicators.vwap });
+            }
+            e.target.options[6].text = `VWAP (${chartData.indicators.vwap ? 'On' : 'Off'})`;
+        } else if (indicator === "atr") {
+            chartData.indicators.atr = !chartData.indicators.atr;
+            if (chartData.atrSeries) {
+                if (chartData.indicators.atr) {
+                    chartData.atrSeries.setData(calculateATR(chartData.cachedData, chartData.indicators.atrPeriod));
+                }
+                chartData.atrSeries.applyOptions({ visible: chartData.indicators.atr });
+            }
+            updateSubchartMargins(chartData);
+            e.target.options[7].text = `ATR ${chartData.indicators.atrPeriod} (${chartData.indicators.atr ? 'On' : 'Off'})`;
         }
         e.target.value = ""; // Reset the dropdown back to the "ƒx" placeholder
         saveLayoutState();
@@ -787,6 +879,42 @@ function updateIntervalOptions(chartData, intervalSelect) {
     const intervals = instrument ? instrument.timeframes : ["1d"];
     intervalSelect.innerHTML = intervals.map(interval => `<option value="${interval}">${interval}</option>`).join("");
     intervalSelect.value = chartData.interval;
+}
+
+function changeChartType(chartData) {
+    if (!chartData.chart) return;
+    
+    const isUp = chartData.lastDirection === 'up';
+    const upColor = "#16a34a";
+    const downColor = "#dc2626";
+    
+    if (chartData.candleSeries) {
+        chartData.chart.removeSeries(chartData.candleSeries);
+    }
+    
+    if (chartData.chartType === 'line') {
+        chartData.candleSeries = chartData.chart.addLineSeries({
+            color: isUp ? upColor : downColor, lineWidth: 2, crosshairMarkerVisible: true,
+            lastValueVisible: false, priceLineVisible: true, priceLineColor: isUp ? upColor : downColor,
+            priceLineWidth: 1, priceLineStyle: 2,
+        });
+    } else if (chartData.chartType === 'bar') {
+        chartData.candleSeries = chartData.chart.addBarSeries({
+            upColor: upColor, downColor: downColor, lastValueVisible: false,
+            priceLineVisible: true, priceLineColor: isUp ? upColor : downColor, priceLineWidth: 1, priceLineStyle: 2,
+        });
+    } else {
+        chartData.candleSeries = chartData.chart.addCandlestickSeries({
+            upColor: upColor, downColor: downColor, wickUpColor: upColor, wickDownColor: downColor,
+            borderVisible: false, priceLineVisible: true, priceLineColor: isUp ? upColor : downColor,
+            priceLineWidth: 1, priceLineStyle: 2, lastValueVisible: false,
+        });
+    }
+    
+    if (chartData.lastPrice) updateChartPriceFormat(chartData, chartData.lastPrice);
+    syncChartWithCache(chartData);
+    restoreDrawings(chartData);
+    if (window.paperTrading && window.paperTrading.updatePositionLines) window.paperTrading.updatePositionLines(chartData);
 }
 
 function initializeChart(chartData) {
@@ -1482,13 +1610,28 @@ function initializeChart(chartData) {
         });
     }
 
-    chartData.candleSeries = chartData.chart.addCandlestickSeries({
-            upColor: "#16a34a", downColor: "#dc2626",
-            wickUpColor: "#16a34a", wickDownColor: "#dc2626",
-            borderVisible: false, priceLineVisible: true,
-            priceLineColor: "#16a34a", priceLineWidth: 1, priceLineStyle: 2,
-            lastValueVisible: false,
+    const isUp = true;
+    const upColor = "#16a34a";
+    const downColor = "#dc2626";
+    
+    if (chartData.chartType === 'line') {
+        chartData.candleSeries = chartData.chart.addLineSeries({
+            color: upColor, lineWidth: 2, crosshairMarkerVisible: true,
+            lastValueVisible: false, priceLineVisible: true, priceLineColor: upColor,
+            priceLineWidth: 1, priceLineStyle: 2,
         });
+    } else if (chartData.chartType === 'bar') {
+        chartData.candleSeries = chartData.chart.addBarSeries({
+            upColor: upColor, downColor: downColor, lastValueVisible: false,
+            priceLineVisible: true, priceLineColor: upColor, priceLineWidth: 1, priceLineStyle: 2,
+        });
+    } else {
+        chartData.candleSeries = chartData.chart.addCandlestickSeries({
+            upColor: upColor, downColor: downColor, wickUpColor: upColor, wickDownColor: downColor,
+            borderVisible: false, priceLineVisible: true, priceLineColor: upColor,
+            priceLineWidth: 1, priceLineStyle: 2, lastValueVisible: false,
+        });
+    }
 
     chartData.volumeSeries = chartData.chart.addHistogramSeries({
         color: '#26a69a',
@@ -1560,6 +1703,36 @@ function initializeChart(chartData) {
         chartData.rsiSeries.createPriceLine({ price: 30, color: '#10b981', lineStyle: 2, axisLabelVisible: false, title: 'OS', lineWidth: 1 });
     }
 
+    chartData.vwapSeries = chartData.chart.addLineSeries({
+        color: chartData.indicators.vwapColor,
+        lineWidth: chartData.indicators.vwapLineWidth,
+        visible: chartData.indicators.vwap,
+        lastValueVisible: false,
+        priceLineVisible: false,
+        lineStyle: 2, // Dashed
+    });
+
+    chartData.atrSeries = chartData.chart.addLineSeries({
+        color: chartData.indicators.atrColor,
+        lineWidth: chartData.indicators.atrLineWidth,
+        priceScaleId: 'atr',
+        visible: true, // Force visible on init
+        lastValueVisible: false,
+        priceLineVisible: false,
+    });
+
+    chartData.chart.priceScale('atr').applyOptions({
+        scaleMargins: { top: 0.8, bottom: 0 },
+        entireTextOnly: true,
+        minimumWidth: 40,
+    });
+
+    if (!chartData.indicators.atr) {
+        chartData.atrSeries.applyOptions({ visible: false });
+    }
+
+    updateSubchartMargins(chartData);
+
     // Add diagnostics requested for wheel event investigation
     setTimeout(() => runWheelDiagnostics(chartData.id), 1000);
 }
@@ -1588,6 +1761,8 @@ function resetChart(chartData) {
     if (chartData.bbMiddleSeries) chartData.bbMiddleSeries.setData([]);
     if (chartData.bbLowerSeries) chartData.bbLowerSeries.setData([]);
     if (chartData.rsiSeries) chartData.rsiSeries.setData([]);
+    if (chartData.vwapSeries) chartData.vwapSeries.setData([]);
+    if (chartData.atrSeries) chartData.atrSeries.setData([]);
     
     chartData.drawingMode = null;
     const container = document.getElementById(`${chartData.id}-container`);
@@ -2058,6 +2233,51 @@ function updateMarkers(chartData) {
     chartData.candleSeries.setMarkers(markers);
 }
 
+function updateSubchartMargins(chartData) {
+    if (!chartData.chart) return;
+    const activeSubcharts = [];
+    if (chartData.indicators.rsi) activeSubcharts.push('rsi');
+    if (chartData.indicators.atr) activeSubcharts.push('atr');
+    
+    const count = activeSubcharts.length;
+    
+    // If ATR is active, it needs more space. Give the sub-panel area more height.
+    const totalSpace = chartData.indicators.atr ? 0.25 : (count > 0 ? 0.15 : 0);
+
+    // Uplift the main candles area by increasing its bottom margin.
+    chartData.chart.priceScale('right').applyOptions({
+        scaleMargins: { top: 0.1, bottom: count > 0 ? totalSpace + 0.05 : 0.15 }
+    });
+    
+    // Decouple volume from subchart stacking, restoring it as an overlay on the main chart
+    if (chartData.volumeSeries) {
+        // We want the base of the volume bars to sit slightly inside the sub-chart panel area.
+        // Let's target 5% of the chart height below the top of the sub-chart panel.
+        const volBottom = count > 0 ? totalSpace - 0.05 : 0;
+        
+        chartData.volumeSeries.priceScale().applyOptions({
+            scaleMargins: { 
+                top: 1.0 - volBottom - 0.20, // Give volume bars a consistent 20% height
+                bottom: volBottom 
+            }
+        });
+    }
+    
+    if (count === 0) return;
+    
+    // Distribute the total space evenly among active subcharts.
+    const spacePerChart = totalSpace / count;
+    activeSubcharts.forEach((id, index) => {
+        const topM = 1.0 - totalSpace + (index * spacePerChart) + 0.02;
+        const bottomM = 1.0 - (1.0 - totalSpace + ((index + 1) * spacePerChart));
+        
+        let scale = null;
+        if (id === 'rsi') scale = chartData.chart.priceScale('rsi');
+        else if (id === 'atr') scale = chartData.chart.priceScale('atr');
+        if (scale) scale.applyOptions({ scaleMargins: { top: topM, bottom: bottomM } });
+    });
+}
+
 function renderAlertLine(chartData, alertObj) {
     if (!chartData.candleSeries) return;
     
@@ -2284,6 +2504,8 @@ function updateChartPriceFormat(chartData, currentPrice) {
     if (chartData.bbUpperSeries) chartData.bbUpperSeries.applyOptions({ priceFormat });
     if (chartData.bbMiddleSeries) chartData.bbMiddleSeries.applyOptions({ priceFormat });
     if (chartData.bbLowerSeries) chartData.bbLowerSeries.applyOptions({ priceFormat });
+    if (chartData.vwapSeries) chartData.vwapSeries.applyOptions({ priceFormat });
+    if (chartData.atrSeries) chartData.atrSeries.applyOptions({ priceFormat });
 }
 
 async function loadChartData(chartData) {
@@ -2402,9 +2624,12 @@ async function loadChartData(chartData) {
 
         const isUp = chartData.currentCandle.close >= chartData.currentCandle.open;
         chartData.lastDirection = isUp ? 'up' : 'down';
-        chartData.candleSeries.applyOptions({
-            priceLineColor: isUp ? "#16a34a" : "#dc2626"
-        });
+        const color = isUp ? "#16a34a" : "#dc2626";
+        if (chartData.chartType === 'line') {
+            chartData.candleSeries.applyOptions({ color: color, priceLineColor: color });
+        } else {
+            chartData.candleSeries.applyOptions({ priceLineColor: color });
+        }
 
         restoreDrawings(chartData);
 
@@ -2422,7 +2647,15 @@ async function loadChartData(chartData) {
 function syncChartWithCache(chartData) {
     if (!chartData.candleSeries || !chartData.cachedData || chartData.cachedData.length === 0) return;
     
-    chartData.candleSeries.setData(chartData.cachedData);
+    let mainData = chartData.cachedData;
+    if (chartData.chartType === 'heikinAshi') {
+        chartData.haData = calculateHeikinAshi(chartData.cachedData);
+        mainData = chartData.haData;
+    } else if (chartData.chartType === 'line') {
+        mainData = chartData.cachedData.map(c => ({ time: c.time, value: c.close }));
+    }
+    
+    chartData.candleSeries.setData(mainData);
     
     if (chartData.indicators.volume && chartData.volumeSeries) {
         chartData.volumeSeries.setData(chartData.cachedData.map(c => ({
@@ -2445,6 +2678,12 @@ function syncChartWithCache(chartData) {
     }
     if (chartData.indicators.rsi && chartData.rsiSeries) {
         chartData.rsiSeries.setData(calculateRSI(chartData.cachedData, chartData.indicators.rsiPeriod));
+    }
+    if (chartData.indicators.vwap && chartData.vwapSeries) {
+        chartData.vwapSeries.setData(calculateVWAP(chartData.cachedData, chartData.interval));
+    }
+    if (chartData.indicators.atr && chartData.atrSeries) {
+        chartData.atrSeries.setData(calculateATR(chartData.cachedData, chartData.indicators.atrPeriod));
     }
 }
 
@@ -2778,7 +3017,8 @@ function flushChartUpdate(chartData) {
     if (!candle) return;
 
     let shouldShift = false;
-    if (chartData.isNewBar && chartData.chart) {
+    const isNewBar = chartData.isNewBar;
+    if (isNewBar && chartData.chart) {
         const timeScale = chartData.chart.timeScale();
         if (typeof timeScale.scrollPosition === 'function') {
             const pos = timeScale.scrollPosition();
@@ -2788,7 +3028,30 @@ function flushChartUpdate(chartData) {
     
     chartData.isNewBar = false;
 
-    chartData.candleSeries.update(candle);
+    let seriesUpdate;
+    if (chartData.chartType === 'heikinAshi') {
+        if (!chartData.haData) chartData.haData = calculateHeikinAshi(chartData.cachedData);
+        const c = candle;
+        let haOpen;
+        if (chartData.haData.length >= 2) {
+            const prevHA = isNewBar ? chartData.haData[chartData.haData.length - 1] : chartData.haData[chartData.haData.length - 2];
+            haOpen = (prevHA.open + prevHA.close) / 2;
+        } else {
+            haOpen = c.open;
+        }
+        const haClose = (c.open + c.high + c.low + c.close) / 4;
+        const haHigh = Math.max(c.high, haOpen, haClose);
+        const haLow = Math.min(c.low, haOpen, haClose);
+        seriesUpdate = { time: c.time, open: haOpen, high: haHigh, low: haLow, close: haClose };
+        if (isNewBar) chartData.haData.push(seriesUpdate);
+        else chartData.haData[chartData.haData.length - 1] = seriesUpdate;
+    } else if (chartData.chartType === 'line') {
+        seriesUpdate = { time: candle.time, value: candle.close };
+    } else {
+        seriesUpdate = candle;
+    }
+
+    chartData.candleSeries.update(seriesUpdate);
     
     if (chartData.indicators.volume) {
         chartData.volumeSeries.update({
@@ -2822,9 +3085,22 @@ function flushChartUpdate(chartData) {
         if (lastRsi) chartData.rsiSeries.update(lastRsi);
     }
 
-    chartData.candleSeries.applyOptions({
-        priceLineColor: chartData.lastDirection === 'up' ? "#16a34a" : "#dc2626"
-    });
+    if (chartData.indicators.vwap) {
+        const lastVwap = calculateLatestVWAP(chartData.cachedData, chartData.interval);
+        if (lastVwap) chartData.vwapSeries.update(lastVwap);
+    }
+
+    if (chartData.indicators.atr) {
+        const lastAtr = calculateLatestATR(chartData.cachedData, chartData.indicators.atrPeriod);
+        if (lastAtr) chartData.atrSeries.update(lastAtr);
+    }
+
+    const color = chartData.lastDirection === 'up' ? "#16a34a" : "#dc2626";
+    if (chartData.chartType === 'line') {
+        chartData.candleSeries.applyOptions({ color: color, priceLineColor: color });
+    } else {
+        chartData.candleSeries.applyOptions({ priceLineColor: color });
+    }
 
     if (shouldShift) {
         chartData.chart.timeScale().scrollToRealTime();
@@ -3156,6 +3432,26 @@ function switchChartSymbol(chartId, newSymbol) {
     }
 }
 
+function calculateHeikinAshi(data) {
+    if (!data || data.length === 0) return [];
+    const ha = [];
+    ha.push({
+        time: data[0].time, open: data[0].open, high: data[0].high, low: data[0].low,
+        close: (data[0].open + data[0].high + data[0].low + data[0].close) / 4
+    });
+    for (let i = 1; i < data.length; i++) {
+        const c = data[i];
+        const haClose = (c.open + c.high + c.low + c.close) / 4;
+        const haOpen = (ha[i-1].open + ha[i-1].close) / 2;
+        const haHigh = Math.max(c.high, haOpen, haClose);
+        const haLow = Math.min(c.low, haOpen, haClose);
+        ha.push({
+            time: c.time, open: haOpen, high: haHigh, low: haLow, close: haClose
+        });
+    }
+    return ha;
+}
+
 function calculateSMA(data, period) {
     const sma = [];
     for (let i = period - 1; i < data.length; i++) {
@@ -3307,6 +3603,122 @@ function calculateLatestRSI(data, period) {
     return { time: data[data.length - 1].time, value: rsiValue };
 }
 
+function getVWAPAnchor(candleDate, interval) {
+    const isIntraday = !interval || ['1m', '3m', '5m', '15m', '30m', '1h', '4h'].includes(interval);
+    if (isIntraday) {
+        return candleDate.getUTCFullYear() + '-' + candleDate.getUTCMonth() + '-' + candleDate.getUTCDate();
+    } else if (interval === '1d') {
+        return candleDate.getUTCFullYear() + '-' + candleDate.getUTCMonth();
+    } else {
+        return candleDate.getUTCFullYear();
+    }
+}
+
+function calculateVWAP(data, interval) {
+    const vwap = [];
+    let cumulativePriceVolume = 0;
+    let cumulativeVolume = 0;
+    let lastAnchor = null;
+
+    for (let i = 0; i < data.length; i++) {
+        const candle = data[i];
+        const candleDate = new Date(candle.time * 1000);
+        const currentAnchor = getVWAPAnchor(candleDate, interval);
+
+        if (lastAnchor !== null && currentAnchor !== lastAnchor) {
+            cumulativePriceVolume = 0;
+            cumulativeVolume = 0;
+        }
+
+        const typicalPrice = (candle.high + candle.low + candle.close) / 3;
+        const priceVolume = typicalPrice * candle.volume;
+
+        cumulativePriceVolume += priceVolume;
+        cumulativeVolume += candle.volume;
+
+        let vwapValue = typicalPrice;
+        if (cumulativeVolume > 0) {
+            vwapValue = cumulativePriceVolume / cumulativeVolume;
+        } else if (vwap.length > 0) {
+            vwapValue = vwap[vwap.length - 1].value;
+        }
+        
+        vwap.push({ time: candle.time, value: vwapValue });
+        lastAnchor = currentAnchor;
+        
+        if (i === data.length - 1) {
+            console.log("VWAP Audit [Historical]:", { time: candleDate.toISOString(), close: candle.close, volume: candle.volume, typicalPrice, cumulativePV: cumulativePriceVolume, cumulativeVolume, vwap: vwapValue, anchor: currentAnchor });
+        }
+    }
+    return vwap;
+}
+
+function calculateLatestVWAP(data, interval) {
+    if (data.length === 0) return null;
+
+    const lastCandle = data[data.length - 1];
+    const lastCandleDate = new Date(lastCandle.time * 1000);
+    const lastAnchor = getVWAPAnchor(lastCandleDate, interval);
+
+    let cumulativePriceVolume = 0;
+    let cumulativeVolume = 0;
+    
+    for (let i = data.length - 1; i >= 0; i--) {
+        const candle = data[i];
+        const candleDate = new Date(candle.time * 1000);
+        if (getVWAPAnchor(candleDate, interval) !== lastAnchor) break;
+        
+        const typicalPrice = (candle.high + candle.low + candle.close) / 3;
+        cumulativePriceVolume += typicalPrice * candle.volume;
+        cumulativeVolume += candle.volume;
+    }
+
+    let vwapValue = (lastCandle.high + lastCandle.low + lastCandle.close) / 3;
+    if (cumulativeVolume > 0) {
+        vwapValue = cumulativePriceVolume / cumulativeVolume;
+    }
+
+    console.log("VWAP Audit [Live Update]:", { close: lastCandle.close, volume: lastCandle.volume, typicalPrice: (lastCandle.high + lastCandle.low + lastCandle.close) / 3, cumulativePV: cumulativePriceVolume, cumulativeVolume, vwap: vwapValue, anchor: lastAnchor });
+
+    return { time: lastCandle.time, value: vwapValue };
+}
+
+function calculateATR(data, period) {
+    const atr = [];
+    if (data.length < period) return atr;
+
+    const trueRanges = [];
+    for (let i = 1; i < data.length; i++) {
+        const c = data[i];
+        const p = data[i - 1];
+        const tr = Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
+        trueRanges.push({ time: c.time, value: tr });
+    }
+
+    if (trueRanges.length < period) return atr;
+
+    let sumTR = 0;
+    for (let i = 0; i < period; i++) sumTR += trueRanges[i].value;
+    let prevATR = sumTR / period;
+    atr.push({ time: trueRanges[period - 1].time, value: prevATR });
+
+    for (let i = period; i < trueRanges.length; i++) {
+        const currentATR = (prevATR * (period - 1) + trueRanges[i].value) / period;
+        atr.push({ time: trueRanges[i].time, value: currentATR });
+        prevATR = currentATR;
+    }
+    return atr;
+}
+
+function calculateLatestATR(data, period) {
+    const lookback = Math.min(data.length, period * 5);
+    if (lookback < period + 1) return null;
+    
+    const relevantData = data.slice(data.length - lookback);
+    const atrValues = calculateATR(relevantData, period);
+    return atrValues.length > 0 ? atrValues[atrValues.length - 1] : null;
+}
+
 function openSettingsModal(chartData) {
     let modal = document.getElementById("chart-settings-modal");
     if (!modal) {
@@ -3387,6 +3799,34 @@ function openSettingsModal(chartData) {
                     <option value="3" ${chartData.indicators.rsiLineWidth == 3 ? 'selected' : ''}>Thick</option>
                 </select>
             </div>
+            <div class="settings-group">
+                <label>VWAP Color</label>
+                <input type="color" id="vwap-color-input" value="${chartData.indicators.vwapColor}">
+            </div>
+            <div class="settings-group">
+                <label>VWAP Thickness</label>
+                <select id="vwap-width-input">
+                    <option value="1" ${chartData.indicators.vwapLineWidth == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${chartData.indicators.vwapLineWidth == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${chartData.indicators.vwapLineWidth == 3 ? 'selected' : ''}>Thick</option>
+                </select>
+            </div>
+            <div class="settings-group">
+                <label>ATR Period</label>
+                <input type="number" id="atr-period-input" value="${chartData.indicators.atrPeriod}" min="1">
+            </div>
+            <div class="settings-group">
+                <label>ATR Color</label>
+                <input type="color" id="atr-color-input" value="${chartData.indicators.atrColor}">
+            </div>
+            <div class="settings-group">
+                <label>ATR Thickness</label>
+                <select id="atr-width-input">
+                    <option value="1" ${chartData.indicators.atrLineWidth == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${chartData.indicators.atrLineWidth == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${chartData.indicators.atrLineWidth == 3 ? 'selected' : ''}>Thick</option>
+                </select>
+            </div>
             <div class="settings-actions">
                 <button id="settings-cancel-btn">Cancel</button>
                 <button id="settings-save-btn">Save</button>
@@ -3406,21 +3846,27 @@ function openSettingsModal(chartData) {
         const bbPeriod = parseInt(document.getElementById("bb-period-input").value, 10);
         const bbStdDev = parseFloat(document.getElementById("bb-stddev-input").value);
         const rsiPeriod = parseInt(document.getElementById("rsi-period-input").value, 10);
+        const atrPeriod = parseInt(document.getElementById("atr-period-input").value, 10);
         
         if (!isNaN(smaPeriod) && smaPeriod > 0) chartData.indicators.smaPeriod = smaPeriod;
         if (!isNaN(emaPeriod) && emaPeriod > 0) chartData.indicators.emaPeriod = emaPeriod;
         if (!isNaN(bbPeriod) && bbPeriod > 0) chartData.indicators.bbPeriod = bbPeriod;
         if (!isNaN(bbStdDev) && bbStdDev > 0) chartData.indicators.bbStdDev = bbStdDev;
         if (!isNaN(rsiPeriod) && rsiPeriod > 0) chartData.indicators.rsiPeriod = rsiPeriod;
+        if (!isNaN(atrPeriod) && atrPeriod > 0) chartData.indicators.atrPeriod = atrPeriod;
         
         chartData.indicators.smaColor = document.getElementById("sma-color-input").value;
         chartData.indicators.emaColor = document.getElementById("ema-color-input").value;
         chartData.indicators.bbColor = document.getElementById("bb-color-input").value;
         chartData.indicators.rsiColor = document.getElementById("rsi-color-input").value;
+        chartData.indicators.vwapColor = document.getElementById("vwap-color-input").value;
+        chartData.indicators.atrColor = document.getElementById("atr-color-input").value;
         chartData.indicators.smaLineWidth = parseInt(document.getElementById("sma-width-input").value, 10);
         chartData.indicators.emaLineWidth = parseInt(document.getElementById("ema-width-input").value, 10);
         chartData.indicators.bbLineWidth = parseInt(document.getElementById("bb-width-input").value, 10);
         chartData.indicators.rsiLineWidth = parseInt(document.getElementById("rsi-width-input").value, 10);
+        chartData.indicators.vwapLineWidth = parseInt(document.getElementById("vwap-width-input").value, 10);
+        chartData.indicators.atrLineWidth = parseInt(document.getElementById("atr-width-input").value, 10);
 
         if (chartData.smaSeries) {
             chartData.smaSeries.applyOptions({ color: chartData.indicators.smaColor, lineWidth: chartData.indicators.smaLineWidth });
@@ -3446,11 +3892,20 @@ function openSettingsModal(chartData) {
             chartData.rsiSeries.applyOptions({ color: chartData.indicators.rsiColor, lineWidth: chartData.indicators.rsiLineWidth });
             if (chartData.indicators.rsi) {
                 chartData.rsiSeries.setData(calculateRSI(chartData.cachedData, chartData.indicators.rsiPeriod));
-                chartData.chart.priceScale('rsi').applyOptions({
-                    scaleMargins: { top: 0.8, bottom: 0 },
-                });
             }
         }
+        if (chartData.vwapSeries) {
+            chartData.vwapSeries.applyOptions({ color: chartData.indicators.vwapColor, lineWidth: chartData.indicators.vwapLineWidth });
+            if (chartData.indicators.vwap) chartData.vwapSeries.setData(calculateVWAP(chartData.cachedData, chartData.interval));
+        }
+        if (chartData.atrSeries) {
+            chartData.atrSeries.applyOptions({ color: chartData.indicators.atrColor, lineWidth: chartData.indicators.atrLineWidth });
+            if (chartData.indicators.atr) {
+                chartData.atrSeries.setData(calculateATR(chartData.cachedData, chartData.indicators.atrPeriod));
+            }
+        }
+
+        updateSubchartMargins(chartData);
 
         const select = document.querySelector(`#${chartData.id} .indicator-select`);
         if (select) {
@@ -3458,6 +3913,8 @@ function openSettingsModal(chartData) {
             select.options[3].text = `EMA ${chartData.indicators.emaPeriod} (${chartData.indicators.ema ? 'On' : 'Off'})`;
             select.options[4].text = `BB ${chartData.indicators.bbPeriod} (${chartData.indicators.bb ? 'On' : 'Off'})`;
             select.options[5].text = `RSI ${chartData.indicators.rsiPeriod} (${chartData.indicators.rsi ? 'On' : 'Off'})`;
+            select.options[6].text = `VWAP (${chartData.indicators.vwap ? 'On' : 'Off'})`;
+            select.options[7].text = `ATR ${chartData.indicators.atrPeriod} (${chartData.indicators.atr ? 'On' : 'Off'})`;
         }
         saveLayoutState();
         modal.style.display = "none";
@@ -4044,7 +4501,7 @@ function injectThemeStyles() {
         /* Asset Info Panel Styles */
         .charts-grid.layout-1.with-info-panel {
             display: grid;
-            grid-template-columns: 1fr 340px;
+            grid-template-columns: 1fr 280px;
             gap: 12px;
             /* Lock grid height to screen view to prevent panel from stretching it */
             height: calc(100vh - 105px) !important;
