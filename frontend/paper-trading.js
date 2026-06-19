@@ -11,6 +11,10 @@ window.PaperTrading = class PaperTrading {
         this.currentReplayTrade = null;
         this.replayMarkers = null;
         this.replayPriceLines = [];
+        this.backtestSummary = null;
+        this.backtestTrades = [];
+        this.backtestEquityCurve = [];
+        this.showHistoryMarkers = false;
         this.startLabelSyncLoop();
     }
     
@@ -25,7 +29,7 @@ window.PaperTrading = class PaperTrading {
     }
 
     formatOHM(p) {
-        return p.toFixed(4);
+        return (p || 0).toFixed(4);
     }
 
     formatDate(timestamp) {
@@ -245,7 +249,10 @@ window.PaperTrading = class PaperTrading {
                 <div class="pt-section">
                     <div class="pt-collapsible-header" id="pt-history-toggle">
                         <span>Trade History</span>
-                        <span id="pt-history-icon">▼</span>
+                        <div>
+                            <button id="pt-toggle-history-btn" class="pt-close-btn" style="padding: 2px 8px; font-size: 10px; margin-right: 8px;">Show Markers</button>
+                            <span id="pt-history-icon">▼</span>
+                        </div>
                     </div>
                     <div class="pt-collapsible-content" id="pt-history-content">
                         <div id="pt-history-list"></div>
@@ -261,6 +268,17 @@ window.PaperTrading = class PaperTrading {
                     <div class="pt-collapsible-content" id="pt-journal-analytics-content">
                         <!-- Filters -->
                         <div style="margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px;">
+                            <div style="font-size: 11px; color: #8b9bb0; margin-bottom: 4px; text-transform: uppercase; font-weight: 700;">Backtest Results</div>
+                            <div id="pt-backtest-summary" style="display: none; background: rgba(59, 130, 246, 0.05); border: 1px solid #3b82f6; border-radius: 4px; padding: 8px; margin-bottom: 12px;">
+                                <div style="font-weight: bold; margin-bottom: 4px;">Last Backtest:</div>
+                                <div id="pt-backtest-stats-display" class="pt-stats-grid"></div>
+                                <div style="display: flex; gap: 8px; margin-top: 8px;">
+                                    <button class="pt-close-btn" style="flex: 1; background: #3b82f6; color: white; padding: 4px 0;" onclick="window.paperTrading.showBacktestDetails()">Details</button>
+                                    <button class="pt-close-btn" style="flex: 1; background: #394654; color: white; padding: 4px 0;" onclick="window.paperTrading.toggleBacktestMarkers()">Toggle</button>
+                                    <button class="pt-close-btn" style="flex: 1; background: #ef4444; color: white; padding: 4px 0;" onclick="window.paperTrading.clearBacktest()">Clear</button>
+                                </div>
+                            </div>
+
                             <label class="pt-label">History Filters</label>
                             <div style="display: flex; gap: 4px;">
                                 <select id="pt-filter-symbol" class="pt-input" style="padding: 4px; font-size: 11px; flex: 1;"><option value="">All Symbols</option></select>
@@ -345,6 +363,18 @@ window.PaperTrading = class PaperTrading {
             }
         });
         
+        const toggleHistoryBtn = document.getElementById('pt-toggle-history-btn');
+        if (toggleHistoryBtn) {
+            toggleHistoryBtn.addEventListener('click', (e) => {
+                e.stopPropagation(); // Prevent opening/closing the history panel
+                this.showHistoryMarkers = !this.showHistoryMarkers;
+                toggleHistoryBtn.textContent = this.showHistoryMarkers ? 'Hide Markers' : 'Show Markers';
+                toggleHistoryBtn.style.background = this.showHistoryMarkers ? '#3b82f6' : '';
+                toggleHistoryBtn.style.color = this.showHistoryMarkers ? 'white' : '';
+                if (window.refreshChartMarkers) window.refreshChartMarkers();
+            });
+        }
+
         document.getElementById('pt-journal-analytics-toggle').addEventListener('click', () => {
             const content = document.getElementById('pt-journal-analytics-content');
             const icon = document.getElementById('pt-journal-analytics-icon');
@@ -418,6 +448,10 @@ window.PaperTrading = class PaperTrading {
         this.renderHistory();
         this.renderStats();
         this.updateLivePnL();
+
+        if (typeof state !== 'undefined' && state.backtest) {
+            this.renderBacktestSummary(state.backtest.summary_stats, state.backtest.trades, state.backtest.equity_curve);
+        }
     }
 
     initAnalyticsCharts() {
@@ -970,6 +1004,186 @@ window.PaperTrading = class PaperTrading {
         attemptDraw();
     }
     
+    renderBacktestSummary(summary, trades, equityCurve) {
+        this.backtestSummary = summary;
+        this.backtestTrades = trades;
+        this.backtestEquityCurve = equityCurve;
+
+        const summaryContainer = document.getElementById('pt-backtest-summary');
+        const statsDisplay = document.getElementById('pt-backtest-stats-display');
+        if (summaryContainer && statsDisplay) {
+            summaryContainer.style.display = 'block';
+            const pnlColor = summary.total_pnl >= 0 ? 'pt-green' : 'pt-red';
+            const winRateColor = (summary.win_rate || 0) >= 50 ? 'pt-green' : 'pt-red';
+            const ddColor = (summary.max_drawdown || 0) > 0 ? 'pt-red' : 'pt-green';
+
+            statsDisplay.innerHTML = `
+                <div class="pt-stat-box"><span class="pt-label">Total PnL</span><span class="pt-value ${pnlColor}">${summary.total_pnl >= 0 ? '+' : ''}${this.formatOHM(summary.total_pnl)}</span></div>
+                <div class="pt-stat-box"><span class="pt-label">Win Rate</span><span class="pt-value ${winRateColor}">${(summary.win_rate || 0).toFixed(1)}%</span></div>
+                <div class="pt-stat-box"><span class="pt-label">Trades</span><span class="pt-value">${summary.num_trades}</span></div>
+                <div class="pt-stat-box"><span class="pt-label">Max DD</span><span class="pt-value ${ddColor}">${(summary.max_drawdown || 0).toFixed(2)}%</span></div>
+            `;
+        }
+    }
+
+    clearBacktest() {
+        this.backtestSummary = null;
+        this.backtestTrades = [];
+        this.backtestEquityCurve = [];
+        
+        const summaryContainer = document.getElementById('pt-backtest-summary');
+        if (summaryContainer) summaryContainer.style.display = 'none';
+
+        // Clear from global state and chart markers instantly
+        if (typeof state !== 'undefined' && state.backtest) {
+            state.backtest = null;
+            if (typeof CONFIG !== 'undefined' && CONFIG.BACKTEST_STORAGE_KEY) {
+                localStorage.removeItem(CONFIG.BACKTEST_STORAGE_KEY);
+            }
+            Object.values(state.charts).forEach(chartData => {
+                chartData.backtestMarkers = [];
+                if (chartData.backtestTradeLines) {
+                    chartData.backtestTradeLines.forEach(line => {
+                        try { chartData.chart.removeSeries(line); } catch(e){}
+                    });
+                    chartData.backtestTradeLines = [];
+                }
+            });
+            if (typeof window.refreshChartMarkers === 'function') window.refreshChartMarkers();
+        }
+    }
+
+    toggleBacktestMarkers() {
+        if (typeof state !== 'undefined' && state.backtest) {
+            // Toggle the visibility flag
+            state.backtest.visible = state.backtest.visible === false ? true : false;
+            
+            Object.values(state.charts).forEach(chartData => {
+                if (chartData.symbol === state.backtest.symbol) {
+                    if (state.backtest.visible) {
+                        // Redraw them
+                        if (typeof renderBacktestResults === 'function') {
+                            renderBacktestResults(chartData, state.backtest);
+                        }
+                    } else {
+                        // Instantly clear them from the chart
+                        chartData.backtestMarkers = [];
+                        if (chartData.backtestTradeLines) {
+                            chartData.backtestTradeLines.forEach(line => { try { chartData.chart.removeSeries(line); } catch(e){} });
+                            chartData.backtestTradeLines = [];
+                        }
+                        if (typeof updateMarkers === 'function') updateMarkers(chartData);
+                    }
+                }
+            });
+        }
+    }
+
+    showBacktestDetails() {
+        if (!this.backtestSummary) return alert("No backtest results to display.");
+
+        let modal = document.getElementById("backtest-details-modal");
+        if (!modal) {
+            modal = document.createElement("div");
+            modal.id = "backtest-details-modal";
+            modal.className = "settings-modal-overlay";
+            document.body.appendChild(modal);
+        }
+
+        const summary = this.backtestSummary;
+        const trades = this.backtestTrades;
+        const equityCurve = this.backtestEquityCurve;
+
+        const pnlColor = summary.total_pnl >= 0 ? 'pt-green' : 'pt-red';
+        const winRateColor = (summary.win_rate || 0) >= 50 ? 'pt-green' : 'pt-red';
+        const ddColor = (summary.max_drawdown || 0) > 0 ? 'pt-red' : 'pt-green';
+
+        let tradesHtml = '<table class="pt-table"><tr><th>Sym</th><th>Side</th><th>Entry</th><th>Exit</th><th>PnL</th><th>Time</th></tr>';
+        trades.forEach(t => {
+            const tradePnlColor = t.pnl >= 0 ? 'pt-green' : 'pt-red';
+            tradesHtml += `<tr>
+                <td>${t.symbol}</td>
+                <td style="color: ${t.direction === 'Long' ? '#10b981' : '#ef4444'}">${t.direction}</td>
+                <td>${this.formatPrice(t.entryPrice)}</td>
+                <td>${this.formatPrice(t.exitPrice)}</td>
+                <td class="${tradePnlColor}">${t.pnl >= 0 ? '+' : ''}${this.formatOHM(t.pnl)}</td>
+                <td>${this.formatDate(t.time)}</td>
+            </tr>`;
+        });
+        tradesHtml += '</table>';
+
+        modal.innerHTML = `
+            <div class="settings-modal-content" style="width: 700px; max-width: 90vw;">
+                <h3>Backtest Results</h3>
+                <div class="pt-stats-grid" style="margin-bottom: 20px; grid-template-columns: repeat(3, 1fr);">
+                    <div class="pt-stat-box"><span class="pt-label">Initial Capital</span><span class="pt-value">${this.formatOHM(summary.initial_capital)}</span></div>
+                    <div class="pt-stat-box"><span class="pt-label">Final Equity</span><span class="pt-value">${this.formatOHM(summary.final_equity)}</span></div>
+                    <div class="pt-stat-box"><span class="pt-label">Total PnL</span><span class="pt-value ${pnlColor}">${summary.total_pnl >= 0 ? '+' : ''}${this.formatOHM(summary.total_pnl)}</span></div>
+                    <div class="pt-stat-box"><span class="pt-label">Num Trades</span><span class="pt-value">${summary.num_trades}</span></div>
+                    <div class="pt-stat-box"><span class="pt-label">Win Rate</span><span class="pt-value ${winRateColor}">${(summary.win_rate || 0).toFixed(1)}%</span></div>
+                    <div class="pt-stat-box"><span class="pt-label">Profit Factor</span><span class="pt-value">${(summary.profit_factor || 0).toFixed(2)}</span></div>
+                    <div class="pt-stat-box"><span class="pt-label">Max Drawdown</span><span class="pt-value ${ddColor}">${(summary.max_drawdown || 0).toFixed(2)}%</span></div>
+                    <div class="pt-stat-box"><span class="pt-label">Avg Win</span><span class="pt-value pt-green">${this.formatOHM(summary.avg_win)}</span></div>
+                    <div class="pt-stat-box"><span class="pt-label">Avg Loss</span><span class="pt-value pt-red">${this.formatOHM(summary.avg_loss)}</span></div>
+                    ${summary.expectancy !== undefined ? `<div class="pt-stat-box"><span class="pt-label">Expectancy</span><span class="pt-value ${summary.expectancy >= 0 ? 'pt-green' : 'pt-red'}">${this.formatOHM(summary.expectancy)}</span></div>` : ''}
+                    ${summary.total_longs !== undefined ? `<div class="pt-stat-box"><span class="pt-label">Longs (WR)</span><span class="pt-value">${summary.total_longs} (${summary.long_win_rate.toFixed(1)}%)</span></div>` : ''}
+                    ${summary.total_shorts !== undefined ? `<div class="pt-stat-box"><span class="pt-label">Shorts (WR)</span><span class="pt-value">${summary.total_shorts} (${summary.short_win_rate.toFixed(1)}%)</span></div>` : ''}
+                </div>
+
+                <div style="font-size: 11px; color: #8b9bb0; margin-bottom: 4px; text-transform: uppercase; font-weight: 700;">Equity Curve</div>
+                <div id="pt-backtest-equity-chart" style="height: 160px; width: 100%; margin-bottom: 16px; border: 1px solid rgba(57, 70, 84, 0.5); border-radius: 4px; overflow: hidden;"></div>
+
+                <div style="font-size: 11px; color: #8b9bb0; margin-bottom: 4px; text-transform: uppercase; font-weight: 700;">Trades List</div>
+                <div style="max-height: 300px; overflow-y: auto; border: 1px solid #394654; border-radius: 4px;">
+                    ${tradesHtml}
+                </div>
+
+                <div class="settings-actions">
+                    <button id="backtest-details-close" class="pt-close-btn">Close</button>
+                </div>
+            </div>
+        `;
+        modal.style.display = "flex";
+
+        document.getElementById("backtest-details-close").onclick = () => modal.style.display = "none";
+
+        // Render equity curve chart
+        const eqContainer = document.getElementById('pt-backtest-equity-chart');
+        if (eqContainer && equityCurve.length > 0) {
+            const isLight = document.body.classList.contains('light-theme');
+            const textColor = isLight ? "#0f172a" : "#d8dee8";
+            const gridColor = isLight ? "#f1f5f9" : "#26313d";
+            const borderColor = isLight ? "#cbd5e1" : "#394654";
+
+            const commonOptions = {
+                autoSize: true,
+                layout: { background: { type: 'solid', color: 'transparent' }, textColor: textColor, fontSize: 10 },
+                grid: { vertLines: { color: gridColor }, horzLines: { color: gridColor } },
+                timeScale: { timeVisible: true, borderVisible: false, borderColor: borderColor },
+                rightPriceScale: { borderVisible: false },
+                handleScroll: false,
+                handleScale: false,
+                crosshair: { mode: LightweightCharts.CrosshairMode.Normal }
+            };
+
+            const equityChart = LightweightCharts.createChart(eqContainer, commonOptions);
+            const equitySeries = equityChart.addLineSeries({
+                color: '#10b981', lineWidth: 2, crosshairMarkerVisible: false, priceLineVisible: false, lastValueVisible: false
+            });
+            equitySeries.setData(equityCurve);
+            equityChart.timeScale().fitContent();
+
+            const resizeObserver = new ResizeObserver(entries => {
+                for (let entry of entries) {
+                    if (entry.target === eqContainer) {
+                        equityChart.resize(entry.contentRect.width, entry.contentRect.height);
+                    }
+                }
+            });
+            resizeObserver.observe(eqContainer);
+        }
+    }
+
     exitReplay() {
         this.currentReplayTrade = null;
         this.replayMarkers = null;
@@ -996,12 +1210,7 @@ window.PaperTrading = class PaperTrading {
         if (cData && cData.chart) {
             cData.customPriceOffset = 0;
             if (cData.candleSeries) {
-                cData.candleSeries.applyOptions({
-                    autoscaleInfoProvider: (baseImplementation) => {
-                        const res = baseImplementation();
-                        return res !== null ? res : null;
-                    }
-                });
+                cData.candleSeries.applyOptions({ autoscaleInfoProvider: null });
             }
             
             const forceReset = () => {
@@ -1072,11 +1281,30 @@ window.PaperTrading = class PaperTrading {
     }
 
     getChartMarkers(symbol) {
-        if (this.currentReplayTrade && this.currentReplayTrade.symbol === symbol && this.replayMarkers) {
-            return this.replayMarkers;
+        let markers = [];
+        
+        // Show all historical trades on the chart
+        if (this.showHistoryMarkers) {
+            this.history.trades.filter(t => t.symbol === symbol).forEach(t => {
+                markers.push({ time: t.time, position: t.direction === 'Long' ? 'belowBar' : 'aboveBar', color: '#3b82f6', shape: t.direction === 'Long' ? 'arrowUp' : 'arrowDown', text: 'ENTRY' });
+                markers.push({ time: t.exitTime, position: t.pnl >= 0 ? 'aboveBar' : 'belowBar', color: t.pnl >= 0 ? '#10b981' : '#ef4444', shape: t.pnl >= 0 ? 'arrowUp' : 'arrowDown', text: 'EXIT' });
+            });
         }
-        // Entry and exit indicators disabled per user preference
-        return [];
+
+        // Show entry markers for current open positions
+        this.positions.positions.filter(p => p.symbol === symbol).forEach(p => {
+            markers.push({ time: p.time, position: p.direction === 'Long' ? 'belowBar' : 'aboveBar', color: '#3b82f6', shape: p.direction === 'Long' ? 'arrowUp' : 'arrowDown', text: 'ENTRY' });
+        });
+
+        if (this.currentReplayTrade && this.currentReplayTrade.symbol === symbol && this.replayMarkers) {
+            // Avoid duplicating the markers if we're already rendering all history
+            this.replayMarkers.forEach(rm => {
+                const exists = markers.some(m => m.time === rm.time && m.text === rm.text);
+                if (!exists) markers.push(rm);
+            });
+        }
+
+        return markers;
     }
     
     startLabelSyncLoop() {

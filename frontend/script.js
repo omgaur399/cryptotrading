@@ -4,6 +4,7 @@ const CONFIG = {
     LAYOUT_STORAGE_KEY: "trading-dashboard-layout",
     THEME_STORAGE_KEY: "trading-dashboard-theme",
     DRAWINGS_STORAGE_KEY: "trading-dashboard-drawings",
+    BACKTEST_STORAGE_KEY: "trading-dashboard-backtest",
     DEFAULT_CHART_COUNT: 4,
     ALLOWED_COUNTS: [1, 2, 4, 6, 8],
 };
@@ -101,18 +102,20 @@ const state = {
     liveStream: null,
     drawings: {},
     hlWs: null,
+    binanceWs: null,
     hlPingInterval: null,
     connected: false,
     theme: "dark",
     isSyncingCrosshair: false,
     obCentered: false,
+    backtest: null, // New state for backtesting
     replay: null,
 };
 
 document.addEventListener("DOMContentLoaded", initializeApp);
 
-async function loadPaperTradingScripts() {
-    const scripts = ['paper-account.js', 'paper-positions.js', 'paper-history.js', 'paper-trading.js'];
+async function loadDependencies() {
+    const scripts = ['indicators.js', 'paper-account.js', 'paper-positions.js', 'paper-history.js', 'paper-trading.js'];
     for (const s of scripts) {
         await new Promise((resolve) => {
             const script = document.createElement('script');
@@ -144,9 +147,18 @@ async function initializeApp() {
         }
     }
 
+    const savedBacktest = localStorage.getItem(CONFIG.BACKTEST_STORAGE_KEY);
+    if (savedBacktest) {
+        try {
+            state.backtest = JSON.parse(savedBacktest);
+        } catch (e) {
+            state.backtest = null;
+        }
+    }
+
     state.chartCount = readSavedChartCount();
     
-    await loadPaperTradingScripts();
+    await loadDependencies();
     if (window.PaperTrading) {
         window.paperTrading = new window.PaperTrading();
     }
@@ -222,6 +234,15 @@ async function initializeApp() {
         replayBtn.style.marginLeft = "12px";
         replayBtn.onclick = toggleReplayMode;
         chartCountEl.parentNode.appendChild(replayBtn);
+
+        const backtestBtn = document.createElement("button");
+        backtestBtn.id = "global-backtest-btn";
+        backtestBtn.className = "theme-btn";
+        backtestBtn.textContent = "📊 Backtest";
+        backtestBtn.style.marginLeft = "12px";
+        backtestBtn.onclick = openBacktestModal;
+        chartCountEl.parentNode.appendChild(backtestBtn);
+
     }
 
     connectLiveStream();
@@ -290,21 +311,20 @@ function saveLayoutState() {
 }
 
 async function loadInstruments() {
-    let hyperliquidPairs = [];
+    let cryptoPairs = [];
     
     try {
-        // Try to fetch the live active coin universe directly from the exchange
-        const res = await fetch("https://api.hyperliquid.xyz/info", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ type: "meta" })
-        });
+        // Fetch the full active coin universe directly from Binance
+        const res = await fetch("https://api.binance.com/api/v3/exchangeInfo");
         const data = await res.json();
-        hyperliquidPairs = data.universe.map(coin => coin.name);
+        cryptoPairs = data.symbols
+            .filter(coin => coin.quoteAsset === 'USDT' && coin.status === 'TRADING')
+            .map(coin => coin.baseAsset);
+        // Remove duplicates and sort alphabetically
+        cryptoPairs = [...new Set(cryptoPairs)].sort();
     } catch (error) {
-        console.warn("Could not fetch live coin universe, using 130+ fallback list.", error);
-        // Fallback master list just in case of an ad-blocker or network hiccup
-        hyperliquidPairs = [
+        console.warn("Could not fetch live coin universe from Binance, using 130+ fallback list.", error);
+        cryptoPairs = [
             "BTC", "ETH", "SOL", "BNB", "XRP", "DOGE", "ADA", "AVAX", "LINK", "DOT",
             "POL", "TON", "SHIB", "LTC", "TRX", "NEAR", "APT", "ARB", "OP", "SUI",
             "INJ", "TIA", "RNDR", "SEI", "DYDX", "FIL", "KAS", "STX", "LDO", "FET",
@@ -322,7 +342,7 @@ async function loadInstruments() {
         ];
     }
 
-    state.instruments = hyperliquidPairs.map(sym => ({
+    state.instruments = cryptoPairs.map(sym => ({
         id: sym,
         source: "hyperliquid",
         symbol: sym,
@@ -343,6 +363,38 @@ function connectLiveStream() {
         };
         state.liveStream.addEventListener('status', () => updateConnectionStatus());
         state.liveStream.addEventListener('ping', () => updateConnectionStatus());
+    }
+
+    // Native Binance WebSocket for all Crypto pairs (Trade Streaming)
+    if (!state.binanceWs) {
+        state.binanceWs = new WebSocket('wss://stream.binance.com:9443/ws');
+        state.binanceWs.onopen = () => {
+            updateConnectionStatus();
+            
+            Object.values(state.charts).forEach(chartData => {
+                chartData.liveSubscribed = false; // Force resubscribe
+                if (chartData.source === 'hyperliquid' && chartData.symbol !== 'none') {
+                    subscribeChart(chartData);
+                }
+            });
+        };
+        state.binanceWs.onclose = () => {
+            state.binanceWs = null;
+            updateConnectionStatus();
+            setTimeout(connectLiveStream, 5000); // Reconnect loop
+        };
+        state.binanceWs.onmessage = event => {
+            const data = JSON.parse(event.data);
+            if (data.e === 'trade') {
+                handlePriceUpdate({
+                    source: 'hyperliquid',
+                    symbol: data.s.replace(/USDT$/, ''),
+                    price: parseFloat(data.p),
+                    time: data.T / 1000,
+                    volume: parseFloat(data.q)
+                });
+            }
+        };
     }
 
     // Native Hyperliquid WebSocket for all Crypto pairs
@@ -701,12 +753,7 @@ function populatePaneControls(chartData) {
         if (chartData.chart) {
             chartData.customPriceOffset = 0;
             if (chartData.candleSeries) {
-                chartData.candleSeries.applyOptions({
-                    autoscaleInfoProvider: (baseImplementation) => {
-                        const res = baseImplementation();
-                        return res !== null ? res : null;
-                    }
-                });
+                chartData.candleSeries.applyOptions({ autoscaleInfoProvider: null });
             }
             // Reset zoom (barSpacing) and right margin
             chartData.chart.timeScale().applyOptions({ rightOffset: 7, barSpacing: 8 });
@@ -1007,6 +1054,18 @@ function initializeChart(chartData) {
 
     let isDragging = false;
     let draggingLineInfo = null;
+    
+    // --- INFINITE SCROLL PAGINATION ---
+    if (typeof chartData.chart.timeScale().subscribeVisibleLogicalRangeChange === "function") {
+        chartData.chart.timeScale().subscribeVisibleLogicalRangeChange((logicalRange) => {
+            if (!logicalRange || chartData.isFetchingHistory || chartData.hasReachedBeginning) return;
+            
+            // If user scrolls within 100 bars of the oldest loaded candle, fetch more
+            if (logicalRange.from < 100) {
+                loadOlderHistoricalData(chartData);
+            }
+        });
+    }
 
     container.addEventListener('mousedown', (e) => {
         if (chartData.drawingMode === 'hline' || chartData.drawingMode === 'vline') return;
@@ -1134,6 +1193,8 @@ function initializeChart(chartData) {
                 const deltaPrice = chartData.panStartPrice - currentPrice;
                 chartData.customPriceOffset = (chartData.customPriceOffset || 0) + deltaPrice;
                 
+                // Reset to native first to break the infinite recursion chain
+                chartData.candleSeries.applyOptions({ autoscaleInfoProvider: null });
                 chartData.candleSeries.applyOptions({
                     autoscaleInfoProvider: (baseImplementation) => {
                         const res = baseImplementation();
@@ -1551,12 +1612,7 @@ function initializeChart(chartData) {
             }
         } else {
             chartData.customPriceOffset = 0;
-            chartData.candleSeries.applyOptions({
-                autoscaleInfoProvider: (baseImplementation) => {
-                    const res = baseImplementation();
-                    return res !== null ? res : null;
-                }
-            });
+            chartData.candleSeries.applyOptions({ autoscaleInfoProvider: null });
             chartData.chart.timeScale().applyOptions({ rightOffset: 7, barSpacing: 8 });
             chartData.chart.timeScale().scrollToRealTime();
             chartData.chart.priceScale('right').applyOptions({ autoScale: true });
@@ -1768,14 +1824,11 @@ function initializeChart(chartData) {
 }
 
 function resetChart(chartData) {
+    chartData.isFetchingHistory = false;
+    chartData.hasReachedBeginning = false;
     chartData.customPriceOffset = 0;
     if (chartData.candleSeries) {
-        chartData.candleSeries.applyOptions({
-            autoscaleInfoProvider: (baseImplementation) => {
-                const res = baseImplementation();
-                return res !== null ? res : null;
-            }
-        });
+        chartData.candleSeries.applyOptions({ autoscaleInfoProvider: null });
     }
     chartData.currentCandle = null;
     chartData.lastPrice = null;
@@ -2265,6 +2318,10 @@ function updateMarkers(chartData) {
         }
     }
     
+    if (chartData.backtestMarkers && chartData.backtestMarkers.length > 0) {
+        markers = markers.concat(chartData.backtestMarkers);
+    }
+
     markers.sort((a, b) => a.time - b.time);
     chartData.candleSeries.setMarkers(markers);
 }
@@ -2519,6 +2576,47 @@ function showNotification(title, body) {
     }, 5000);
 }
 
+async function loadOlderHistoricalData(chartData) {
+    if (chartData.isFetchingHistory || !chartData.cachedData || chartData.cachedData.length === 0) return;
+    chartData.isFetchingHistory = true;
+    
+    const oldestCandle = chartData.cachedData[0];
+    const beforeTimestamp = oldestCandle.time;
+    
+    try {
+        const response = await fetch(`${CONFIG.API_BASE}/history?symbol=${chartData.symbol}&timeframe=${chartData.interval}&before_timestamp=${beforeTimestamp}&limit=1000`);
+        const payload = await response.json();
+        
+        if (!response.ok || !payload.candles || payload.candles.length === 0) {
+            chartData.hasReachedBeginning = true;
+            chartData.isFetchingHistory = false;
+            return;
+        }
+        
+        let oldCandles = payload.candles.map(normalizeCandle).filter(Boolean);
+        if (oldCandles.length === 0) {
+            chartData.hasReachedBeginning = true;
+            chartData.isFetchingHistory = false;
+            return;
+        }
+        
+        oldCandles.sort((a, b) => a.time - b.time);
+        
+        // Safely prepend the older data
+        chartData.cachedData = [...oldCandles, ...chartData.cachedData];
+        
+        // Re-calculate indicators smoothly and push into existing series arrays
+        syncChartWithCache(chartData);
+        restoreDrawings(chartData);
+        if (typeof updateMarkers === 'function') updateMarkers(chartData);
+        
+        chartData.isFetchingHistory = false;
+    } catch (err) {
+        console.error("Failed to load older history", err);
+        chartData.isFetchingHistory = false;
+    }
+}
+
 function updateChartPriceFormat(chartData, currentPrice) {
     if (!currentPrice) return;
     let precision = 2;
@@ -2552,88 +2650,12 @@ async function loadChartData(chartData) {
     try {
         setDataStatus(`Loading ${chartData.symbol} ${chartData.interval}`);
         
-        let candles = [];
-        
-        if (chartData.source === "hyperliquid") {
-            let hlData = [];
-            try {
-                const intervalMap = { "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400 };
-                const seconds = intervalMap[chartData.interval] || 3600;
-                // Request 5000 candles of history from Hyperliquid (Maximum limit per single API request)
-                const startTime = Date.now() - (seconds * 5000 * 1000);
-                
-                const res = await fetch("https://api.hyperliquid.xyz/info", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        type: "candleSnapshot",
-                    req: { coin: chartData.symbol, interval: chartData.interval, startTime: startTime, endTime: Date.now() }
-                    })
-                });
-                
-                if (res.ok) hlData = await res.json();
-            } catch (e) {
-                console.warn("Hyperliquid fetch failed", e);
-            }
-            
-            if (Array.isArray(hlData) && hlData.length > 0) {
-                candles = hlData.map(c => normalizeCandle({
-                    time: Math.floor(c.t / 1000),
-                    open: c.o,
-                    high: c.h,
-                    low: c.l,
-                    close: c.c,
-                    volume: c.v
-                })).filter(Boolean);
-            } else {
-                console.warn(`No candles from Hyperliquid for ${chartData.symbol}, trying Binance Spot...`);
-                let cleanSymbol = chartData.symbol.toUpperCase();
-                if (cleanSymbol === 'MATIC') cleanSymbol = 'POL';
-                if (cleanSymbol.startsWith('1000')) cleanSymbol = cleanSymbol.replace(/^1000/, '');
-                
-                // Maximize the historical limits for the fallback APIs
-                const endpoints = [
-                    `https://api.binance.com/api/v3/klines?symbol=${cleanSymbol}USDT&interval=${chartData.interval}&limit=1000`,
-                    `https://data-api.binance.vision/api/v3/klines?symbol=${cleanSymbol}USDT&interval=${chartData.interval}&limit=1000`,
-                    `https://fapi.binance.com/fapi/v1/klines?symbol=${cleanSymbol}USDT&interval=${chartData.interval}&limit=1500`,
-                    `https://fapi.binance.com/fapi/v1/klines?symbol=1000${cleanSymbol}USDT&interval=${chartData.interval}&limit=1500`,
-                    `https://api.mexc.com/api/v3/klines?symbol=${cleanSymbol}USDT&interval=${chartData.interval === '1h' ? '60m' : chartData.interval}&limit=1000`,
-                    `https://api.mexc.com/api/v3/klines?symbol=1000${cleanSymbol}USDT&interval=${chartData.interval === '1h' ? '60m' : chartData.interval}&limit=1000`
-                ];
-                
-                let bData = null;
-                let is1000x = false;
-                for (const url of endpoints) {
-                    try {
-                        const bRes = await fetch(url);
-                        if (bRes.ok) { 
-                            bData = await bRes.json(); 
-                            if (url.includes('symbol=1000')) is1000x = true;
-                            break; 
-                        }
-                    } catch (err) { /* Ignore ISP blocks/CORS errors and try next */ }
-                }
-                
-                if (!bData) throw new Error(`Data blocked or unavailable for ${chartData.symbol}`);
-
-                const scale = is1000x ? 1000 : 1;
-                candles = bData.filter(c => Array.isArray(c) && c.length >= 6).map(c => normalizeCandle({
-                    time: Math.floor(c[0] / 1000),
-                    open: c[1] / scale,
-                    high: c[2] / scale,
-                    low: c[3] / scale,
-                    close: c[4] / scale,
-                    volume: c[5] * scale
-                })).filter(Boolean);
-            }
-        } else {
-            const response = await fetch(`${CONFIG.API_BASE}/data/${chartData.source}/${chartData.symbol}/${chartData.interval}`);
-            const payload = await response.json();
-            if (!response.ok || !payload.candles || payload.candles.length === 0) {
-                throw new Error(payload.error || "No candles available");
-            }
-            candles = payload.candles.map(normalizeCandle).filter(Boolean);
+        const response = await fetch(`${CONFIG.API_BASE}/history?symbol=${chartData.symbol}&timeframe=${chartData.interval}&limit=1000`);
+        const payload = await response.json();
+        if (!response.ok || !payload.candles || payload.candles.length === 0) {
+            throw new Error(payload.error || "No candles available");
         }
+        let candles = payload.candles.map(normalizeCandle).filter(Boolean);
 
         if (candles.length === 0) throw new Error("No valid candle data parsed");
         
@@ -2644,14 +2666,16 @@ async function loadChartData(chartData) {
         chartData.cachedData = candles;
         syncChartWithCache(chartData);
 
-        chartData.chart.timeScale().applyOptions({ rightOffset: 7, barSpacing: 8 });
-        chartData.chart.timeScale().scrollToRealTime();
-
-        // Let the chart auto-scale perfectly to the data, then unlock the Y-axis
-        // so you can instantly drag the candles up and down with the mouse.
-        // Let the chart auto-scale perfectly to the data.
-        // Users can unlock the Y-axis manually at any time by dragging the price scale.
-        chartData.chart.priceScale('right').applyOptions({ autoScale: true });
+        const forceReset = () => {
+            if (!chartData.chart) return;
+            try {
+                chartData.chart.timeScale().applyOptions({ rightOffset: 7, barSpacing: 8 });
+                chartData.chart.timeScale().scrollToRealTime();
+                chartData.chart.priceScale('right').applyOptions({ autoScale: true });
+            } catch(e) {}
+        };
+        forceReset();
+        setTimeout(forceReset, 50);
 
         chartData.currentCandle = candles[candles.length - 1];
         chartData.referencePrice = candles.length > 1 ? candles[candles.length - 2].close : chartData.currentCandle.open;
@@ -2674,6 +2698,10 @@ async function loadChartData(chartData) {
         subscribeChart(chartData);
         setDataStatus(`Loaded ${chartData.symbol} ${chartData.interval}`);
         updateChartCountdown(chartData); // Show timer instantly after load
+
+        if (state.backtest && state.backtest.symbol === chartData.symbol && state.backtest.interval === chartData.interval) {
+            renderBacktestResults(chartData, state.backtest);
+        }
     } catch (error) {
         setPaneMessage(chartData.id, error.message);
         setDataStatus(error.message);
@@ -2738,12 +2766,20 @@ function normalizeCandle(candle) {
 function subscribeChart(chartData) {
     if (chartData.liveSubscribed || chartData.symbol === "No Chart" || chartData.symbol === "none") return;
     
-    if (chartData.source === "hyperliquid" && state.hlWs && state.hlWs.readyState === WebSocket.OPEN) {
-        state.hlWs.send(JSON.stringify({
-            method: "subscribe",
-            subscription: { type: "trades", coin: chartData.symbol }
-        }));
-        if (state.chartCount === 1 && chartData.id === 'chart-1') {
+    if (chartData.source === "hyperliquid") {
+        // Subscribe to Binance for Trades
+        if (state.binanceWs && state.binanceWs.readyState === WebSocket.OPEN) {
+            const streamName = `${chartData.symbol.toLowerCase()}usdt@trade`;
+            state.binanceWs.send(JSON.stringify({
+                method: "SUBSCRIBE",
+                params: [streamName],
+                id: Date.now()
+            }));
+            chartData.liveSubscribed = true;
+        }
+        
+        // Subscribe to Hyperliquid for L2 Book (only chart 1)
+        if (state.chartCount === 1 && chartData.id === 'chart-1' && state.hlWs && state.hlWs.readyState === WebSocket.OPEN) {
             state.hlWs.send(JSON.stringify({
                 method: "subscribe",
                 subscription: { type: "l2Book", coin: chartData.symbol }
@@ -2768,18 +2804,22 @@ function unsubscribeChart(chartData) {
     if (!chartData.liveSubscribed || chartData.symbol === "No Chart" || chartData.symbol === "none") return;
     
     if (chartData.source === "hyperliquid") {
-        if (state.hlWs && state.hlWs.readyState === WebSocket.OPEN) {
+        // Unsubscribe from Binance
+        if (state.binanceWs && state.binanceWs.readyState === WebSocket.OPEN) {
+            const streamName = `${chartData.symbol.toLowerCase()}usdt@trade`;
+            state.binanceWs.send(JSON.stringify({
+                method: "UNSUBSCRIBE",
+                params: [streamName],
+                id: Date.now()
+            }));
+        }
+        // Unsubscribe from Hyperliquid L2
+        if (chartData.l2Subscribed && state.hlWs && state.hlWs.readyState === WebSocket.OPEN) {
             state.hlWs.send(JSON.stringify({
                 method: "unsubscribe",
-                subscription: { type: "trades", coin: chartData.symbol }
+                subscription: { type: "l2Book", coin: chartData.symbol }
             }));
-            if (chartData.l2Subscribed) {
-                state.hlWs.send(JSON.stringify({
-                    method: "unsubscribe",
-                    subscription: { type: "l2Book", coin: chartData.symbol }
-                }));
-                chartData.l2Subscribed = false;
-            }
+            chartData.l2Subscribed = false;
         }
     }
     chartData.liveSubscribed = false;
@@ -3342,18 +3382,18 @@ function formatCountdown(ms) {
 function updateConnectionStatus() {
     const isSSEConnected = state.liveStream && state.liveStream.readyState === 1; // 1 is OPEN
     const isWSConnected = state.hlWs && state.hlWs.readyState === 1;
-    const isConnected = isSSEConnected || isWSConnected;
+    const isBinanceConnected = state.binanceWs && state.binanceWs.readyState === 1;
+    const isConnected = isSSEConnected || isWSConnected || isBinanceConnected;
     const wasConnected = state.connected;
     state.connected = isConnected;
     
     const status = document.getElementById("connection-status");
     if (status) {
-        status.textContent = isConnected ? "Live connected" : "Live disconnected";
-        if (isSSEConnected && isWSConnected) {
+        if (isSSEConnected && (isWSConnected || isBinanceConnected)) {
             status.textContent = "Live connected (All)";
         } else if (isSSEConnected) {
             status.textContent = "Live connected (Stocks)";
-        } else if (isWSConnected) {
+        } else if (isWSConnected || isBinanceConnected) {
             status.textContent = "Live connected (Crypto)";
         } else {
             status.textContent = "Live disconnected";
@@ -3472,293 +3512,6 @@ function switchChartSymbol(chartId, newSymbol) {
     if (window.paperTrading && state.activeChartId === chartId) {
         window.paperTrading.setActiveSymbol(newSymbol);
     }
-}
-
-function calculateHeikinAshi(data) {
-    if (!data || data.length === 0) return [];
-    const ha = [];
-    ha.push({
-        time: data[0].time, open: data[0].open, high: data[0].high, low: data[0].low,
-        close: (data[0].open + data[0].high + data[0].low + data[0].close) / 4
-    });
-    for (let i = 1; i < data.length; i++) {
-        const c = data[i];
-        const haClose = (c.open + c.high + c.low + c.close) / 4;
-        const haOpen = (ha[i-1].open + ha[i-1].close) / 2;
-        const haHigh = Math.max(c.high, haOpen, haClose);
-        const haLow = Math.min(c.low, haOpen, haClose);
-        ha.push({
-            time: c.time, open: haOpen, high: haHigh, low: haLow, close: haClose
-        });
-    }
-    return ha;
-}
-
-function calculateSMA(data, period) {
-    const sma = [];
-    for (let i = period - 1; i < data.length; i++) {
-        let sum = 0;
-        for (let j = 0; j < period; j++) {
-            sum += data[i - j].close;
-        }
-        sma.push({ time: data[i].time, value: sum / period });
-    }
-    return sma;
-}
-
-function calculateLatestSMA(data, period) {
-    if (data.length < period) return null;
-    let sum = 0;
-    for (let i = 0; i < period; i++) {
-        sum += data[data.length - 1 - i].close;
-    }
-    return { time: data[data.length - 1].time, value: sum / period };
-}
-
-function calculateLatestEMA(data, period) {
-    if (data.length < period) return null;
-    
-    const multiplier = 2 / (period + 1);
-    let ema = 0;
-    for (let i = 0; i < period; i++) ema += data[i].close;
-    ema /= period;
-
-    for (let i = period; i < data.length; i++) {
-        ema = (data[i].close - ema) * multiplier + ema;
-    }
-    return { time: data[data.length - 1].time, value: ema };
-}
-
-function calculateEMA(data, period) {
-    const ema = [];
-    if (data.length < period) return ema;
-    
-    const multiplier = 2 / (period + 1);
-    let sum = 0;
-    for (let i = 0; i < period; i++) sum += data[i].close;
-    let prevEMA = sum / period;
-    ema.push({ time: data[period - 1].time, value: prevEMA });
-
-    for (let i = period; i < data.length; i++) {
-        const currentEMA = (data[i].close - prevEMA) * multiplier + prevEMA;
-        ema.push({ time: data[i].time, value: currentEMA });
-        prevEMA = currentEMA;
-    }
-    return ema;
-}
-
-function calculateBB(data, period, stdDevMult) {
-    const upper = [], middle = [], lower = [];
-    for (let i = period - 1; i < data.length; i++) {
-        let sum = 0;
-        for (let j = 0; j < period; j++) sum += data[i - j].close;
-        const sma = sum / period;
-        
-        let varianceSum = 0;
-        for (let j = 0; j < period; j++) {
-            varianceSum += Math.pow(data[i - j].close - sma, 2);
-        }
-        const stdDev = Math.sqrt(varianceSum / period);
-        
-        const time = data[i].time;
-        upper.push({ time, value: sma + stdDevMult * stdDev });
-        middle.push({ time, value: sma });
-        lower.push({ time, value: sma - stdDevMult * stdDev });
-    }
-    return { upper, middle, lower };
-}
-
-function calculateLatestBB(data, period, stdDevMult) {
-    if (data.length < period) return null;
-    let sum = 0;
-    for (let i = 0; i < period; i++) sum += data[data.length - 1 - i].close;
-    const sma = sum / period;
-    
-    let varianceSum = 0;
-    for (let i = 0; i < period; i++) varianceSum += Math.pow(data[data.length - 1 - i].close - sma, 2);
-    const stdDev = Math.sqrt(varianceSum / period);
-    
-    const time = data[data.length - 1].time;
-    return { upper: { time, value: sma + stdDevMult * stdDev }, middle: { time, value: sma }, lower: { time, value: sma - stdDevMult * stdDev } };
-}
-
-function calculateRSI(data, period) {
-    const rsi = [];
-    if (data.length < period + 1) return rsi;
-
-    let gains = 0, losses = 0;
-    for (let i = 1; i <= period; i++) {
-        const change = data[i].close - data[i - 1].close;
-        if (change >= 0) gains += change;
-        else losses -= change;
-    }
-
-    let avgGain = gains / period;
-    let avgLoss = losses / period;
-    let rsiValue = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
-    if (avgGain === 0 && avgLoss === 0) rsiValue = 50;
-    rsi.push({ time: data[period].time, value: rsiValue });
-
-    for (let i = period + 1; i < data.length; i++) {
-        const change = data[i].close - data[i - 1].close;
-        const gain = change >= 0 ? change : 0;
-        const loss = change < 0 ? -change : 0;
-
-        avgGain = (avgGain * (period - 1) + gain) / period;
-        avgLoss = (avgLoss * (period - 1) + loss) / period;
-
-        rsiValue = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
-        if (avgGain === 0 && avgLoss === 0) rsiValue = 50;
-        rsi.push({ time: data[i].time, value: rsiValue });
-    }
-    return rsi;
-}
-
-function calculateLatestRSI(data, period) {
-    const lookback = Math.min(data.length, period * 5);
-    if (lookback < period + 1) return null;
-    
-    const startIdx = data.length - lookback;
-    let gains = 0, losses = 0;
-    for (let i = startIdx + 1; i <= startIdx + period; i++) {
-        const change = data[i].close - data[i - 1].close;
-        if (change >= 0) gains += change;
-        else losses -= change;
-    }
-
-    let avgGain = gains / period;
-    let avgLoss = losses / period;
-    let rsiValue = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
-    if (avgGain === 0 && avgLoss === 0) rsiValue = 50;
-
-    for (let i = startIdx + period + 1; i < data.length; i++) {
-        const change = data[i].close - data[i - 1].close;
-        const gain = change >= 0 ? change : 0;
-        const loss = change < 0 ? -change : 0;
-
-        avgGain = (avgGain * (period - 1) + gain) / period;
-        avgLoss = (avgLoss * (period - 1) + loss) / period;
-
-        rsiValue = avgLoss === 0 ? 100 : 100 - (100 / (1 + avgGain / avgLoss));
-        if (avgGain === 0 && avgLoss === 0) rsiValue = 50;
-    }
-    return { time: data[data.length - 1].time, value: rsiValue };
-}
-
-function getVWAPAnchor(candleDate, interval) {
-    const isIntraday = !interval || ['1m', '3m', '5m', '15m', '30m', '1h', '4h'].includes(interval);
-    if (isIntraday) {
-        return candleDate.getUTCFullYear() + '-' + candleDate.getUTCMonth() + '-' + candleDate.getUTCDate();
-    } else if (interval === '1d') {
-        return candleDate.getUTCFullYear() + '-' + candleDate.getUTCMonth();
-    } else {
-        return candleDate.getUTCFullYear();
-    }
-}
-
-function calculateVWAP(data, interval) {
-    const vwap = [];
-    let cumulativePriceVolume = 0;
-    let cumulativeVolume = 0;
-    let lastAnchor = null;
-
-    for (let i = 0; i < data.length; i++) {
-        const candle = data[i];
-        const candleDate = new Date(candle.time * 1000);
-        const currentAnchor = getVWAPAnchor(candleDate, interval);
-
-        if (lastAnchor !== null && currentAnchor !== lastAnchor) {
-            cumulativePriceVolume = 0;
-            cumulativeVolume = 0;
-        }
-
-        const typicalPrice = (candle.high + candle.low + candle.close) / 3;
-        const priceVolume = typicalPrice * candle.volume;
-
-        cumulativePriceVolume += priceVolume;
-        cumulativeVolume += candle.volume;
-
-        let vwapValue = typicalPrice;
-        if (cumulativeVolume > 0) {
-            vwapValue = cumulativePriceVolume / cumulativeVolume;
-        } else if (vwap.length > 0) {
-            vwapValue = vwap[vwap.length - 1].value;
-        }
-        
-        vwap.push({ time: candle.time, value: vwapValue });
-        lastAnchor = currentAnchor;
-        
-        if (i === data.length - 1) {
-            console.log("VWAP Audit [Historical]:", { time: candleDate.toISOString(), close: candle.close, volume: candle.volume, typicalPrice, cumulativePV: cumulativePriceVolume, cumulativeVolume, vwap: vwapValue, anchor: currentAnchor });
-        }
-    }
-    return vwap;
-}
-
-function calculateLatestVWAP(data, interval) {
-    if (data.length === 0) return null;
-
-    const lastCandle = data[data.length - 1];
-    const lastCandleDate = new Date(lastCandle.time * 1000);
-    const lastAnchor = getVWAPAnchor(lastCandleDate, interval);
-
-    let cumulativePriceVolume = 0;
-    let cumulativeVolume = 0;
-    
-    for (let i = data.length - 1; i >= 0; i--) {
-        const candle = data[i];
-        const candleDate = new Date(candle.time * 1000);
-        if (getVWAPAnchor(candleDate, interval) !== lastAnchor) break;
-        
-        const typicalPrice = (candle.high + candle.low + candle.close) / 3;
-        cumulativePriceVolume += typicalPrice * candle.volume;
-        cumulativeVolume += candle.volume;
-    }
-
-    let vwapValue = (lastCandle.high + lastCandle.low + lastCandle.close) / 3;
-    if (cumulativeVolume > 0) {
-        vwapValue = cumulativePriceVolume / cumulativeVolume;
-    }
-
-    console.log("VWAP Audit [Live Update]:", { close: lastCandle.close, volume: lastCandle.volume, typicalPrice: (lastCandle.high + lastCandle.low + lastCandle.close) / 3, cumulativePV: cumulativePriceVolume, cumulativeVolume, vwap: vwapValue, anchor: lastAnchor });
-
-    return { time: lastCandle.time, value: vwapValue };
-}
-
-function calculateATR(data, period) {
-    const atr = [];
-    if (data.length < period) return atr;
-
-    const trueRanges = [];
-    for (let i = 1; i < data.length; i++) {
-        const c = data[i];
-        const p = data[i - 1];
-        const tr = Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
-        trueRanges.push({ time: c.time, value: tr });
-    }
-
-    if (trueRanges.length < period) return atr;
-
-    let sumTR = 0;
-    for (let i = 0; i < period; i++) sumTR += trueRanges[i].value;
-    let prevATR = sumTR / period;
-    atr.push({ time: trueRanges[period - 1].time, value: prevATR });
-
-    for (let i = period; i < trueRanges.length; i++) {
-        const currentATR = (prevATR * (period - 1) + trueRanges[i].value) / period;
-        atr.push({ time: trueRanges[i].time, value: currentATR });
-        prevATR = currentATR;
-    }
-    return atr;
-}
-
-function calculateLatestATR(data, period) {
-    const lookback = Math.min(data.length, period * 5);
-    if (lookback < period + 1) return null;
-    
-    const relevantData = data.slice(data.length - lookback);
-    const atrValues = calculateATR(relevantData, period);
-    return atrValues.length > 0 ? atrValues[atrValues.length - 1] : null;
 }
 
 function openSettingsModal(chartData) {
@@ -6054,5 +5807,274 @@ function exitReplayMode() {
     if (chartToUpdate) {
         updateMarkers(chartToUpdate);
         chartToUpdate.chart.timeScale().scrollToRealTime();
+    }
+}
+
+// --- Backtesting System ---
+function openBacktestModal() {
+    let modal = document.getElementById("backtest-modal");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "backtest-modal";
+        modal.className = "settings-modal-overlay";
+        document.body.appendChild(modal);
+    }
+
+    const activeChart = state.charts[state.activeChartId];
+    const defaultSymbol = activeChart ? activeChart.symbol : 'BTC';
+    const defaultInterval = activeChart ? activeChart.interval : '1h';
+
+    modal.innerHTML = `
+        <div class="settings-modal-content" style="width: 400px;">
+            <h3>Backtest Strategy</h3>
+            <div class="settings-group" style="flex-direction: column; align-items: flex-start;">
+                <label style="margin-bottom: 6px;">Strategy</label>
+                <select id="backtest-strategy" class="pt-input" style="width: 100%;">
+                    <option value="sma_crossover">SMA Crossover</option>
+                    <option value="rsi_strategy">RSI Strategy</option>
+                    <option value="vwap_ema_trend_pullback">VWAP EMA Trend Pullback</option>
+                </select>
+            </div>
+            <div class="settings-group" style="flex-direction: column; align-items: flex-start;">
+                <label style="margin-bottom: 6px;">Symbol</label>
+                <select id="backtest-symbol" class="pt-input" style="width: 100%;"></select>
+            </div>
+            <div class="settings-group" style="flex-direction: column; align-items: flex-start;">
+                <label style="margin-bottom: 6px;">Interval</label>
+                <select id="backtest-interval" class="pt-input" style="width: 100%;"></select>
+            </div>
+            <div class="settings-group">
+                <div style="flex: 1; display: flex; flex-direction: column; align-items: flex-start;">
+                    <label style="margin-bottom: 6px;">Start Date</label>
+                    <input type="date" id="backtest-start-date" class="pt-input" style="width: 100%;">
+                </div>
+                <div style="flex: 1; display: flex; flex-direction: column; align-items: flex-start;">
+                    <label style="margin-bottom: 6px;">End Date</label>
+                    <input type="date" id="backtest-end-date" class="pt-input" style="width: 100%;">
+                </div>
+            </div>
+            
+            <div id="sma-parameters" style="margin-top: 16px; border-top: 1px solid #394654; padding-top: 16px;">
+                <h4>SMA Crossover Parameters</h4>
+                <div class="settings-group">
+                    <label>Fast Period</label>
+                    <input type="number" id="sma-fast-period" value="10" min="1" class="pt-input" style="width: 80px;">
+                </div>
+                <div class="settings-group">
+                    <label>Slow Period</label>
+                    <input type="number" id="sma-slow-period" value="20" min="1" class="pt-input" style="width: 80px;">
+                </div>
+            </div>
+
+            <div id="rsi-parameters" style="display: none; margin-top: 16px; border-top: 1px solid #394654; padding-top: 16px;">
+                <h4>RSI Strategy Parameters</h4>
+                <div class="settings-group">
+                    <label>RSI Period</label>
+                    <input type="number" id="rsi-period" value="14" min="1" class="pt-input" style="width: 80px;">
+                </div>
+                <div class="settings-group">
+                    <label>Overbought</label>
+                    <input type="number" id="rsi-overbought" value="70" min="1" class="pt-input" style="width: 80px;">
+                </div>
+                <div class="settings-group">
+                    <label>Oversold</label>
+                    <input type="number" id="rsi-oversold" value="30" min="1" class="pt-input" style="width: 80px;">
+                </div>
+            </div>
+
+            <div class="settings-actions">
+                <button id="backtest-cancel" class="pt-close-btn">Cancel</button>
+                <button id="backtest-run" class="pt-btn pt-buy-btn">Run Backtest</button>
+            </div>
+            <div id="backtest-loading" style="display: none; text-align: center; margin-top: 10px; color: #3b82f6;">Running backtest...</div>
+            <div id="backtest-error" style="display: none; text-align: center; margin-top: 10px; color: #ef4444;"></div>
+        </div>
+    `;
+    modal.style.display = "flex";
+
+    const symbolSelect = document.getElementById('backtest-symbol');
+    const intervalSelect = document.getElementById('backtest-interval');
+    const strategySelect = document.getElementById('backtest-strategy');
+    const smaParams = document.getElementById('sma-parameters');
+    const rsiParams = document.getElementById('rsi-parameters');
+
+    strategySelect.addEventListener('change', () => {
+        const strategy = strategySelect.value;
+        smaParams.style.display = 'none';
+        rsiParams.style.display = 'none';
+
+        if (strategy === 'sma_crossover') {
+            smaParams.style.display = 'block';
+        } else if (strategy === 'rsi_strategy') {
+            rsiParams.style.display = 'block';
+        }
+    });
+
+    state.instruments.forEach(inst => {
+        const option = document.createElement('option');
+        option.value = inst.symbol;
+        option.textContent = inst.symbol;
+        symbolSelect.appendChild(option);
+    });
+    symbolSelect.value = defaultSymbol;
+
+    const currentInstrument = state.instruments.find(inst => inst.symbol === defaultSymbol);
+    if (currentInstrument) {
+        currentInstrument.timeframes.forEach(tf => {
+            const option = document.createElement('option');
+            option.value = tf;
+            option.textContent = tf;
+            intervalSelect.appendChild(option);
+        });
+        intervalSelect.value = defaultInterval;
+    }
+
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setMonth(endDate.getMonth() - 3);
+    document.getElementById('backtest-start-date').value = startDate.toISOString().split('T')[0];
+    document.getElementById('backtest-end-date').value = endDate.toISOString().split('T')[0];
+
+    document.getElementById("backtest-cancel").onclick = () => modal.style.display = "none";
+
+    document.getElementById("backtest-run").onclick = async () => {
+        const loadingEl = document.getElementById('backtest-loading');
+        const errorEl = document.getElementById('backtest-error');
+        loadingEl.style.display = 'block';
+        errorEl.style.display = 'none';
+
+        try {
+            const strategy = document.getElementById('backtest-strategy').value;
+            let parameters = {};
+            if (strategy === 'sma_crossover') {
+                parameters = {
+                    fast_period: parseInt(document.getElementById('sma-fast-period').value),
+                    slow_period: parseInt(document.getElementById('sma-slow-period').value),
+                };
+            } else if (strategy === 'rsi_strategy') {
+                parameters = {
+                    rsi_period: parseInt(document.getElementById('rsi-period').value),
+                    overbought_level: parseInt(document.getElementById('rsi-overbought').value),
+                    oversold_level: parseInt(document.getElementById('rsi-oversold').value),
+                };
+            } else if (strategy === 'vwap_ema_trend_pullback') {
+                parameters = {};
+            }
+
+            const response = await fetch(`${CONFIG.API_BASE}/backtest`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    strategy: strategy,
+                    symbol: document.getElementById('backtest-symbol').value,
+                    interval: document.getElementById('backtest-interval').value,
+                    startTime: new Date(document.getElementById('backtest-start-date').value).getTime() / 1000,
+                    endTime: new Date(document.getElementById('backtest-end-date').value).getTime() / 1000,
+                    parameters: parameters
+                })
+            });
+
+            const result = await response.json();
+            if (!response.ok || result.error) throw new Error(result.error || 'Backtest failed');
+
+            state.backtest = { 
+                ...result, 
+                symbol: document.getElementById('backtest-symbol').value,
+                interval: document.getElementById('backtest-interval').value
+            };
+            localStorage.setItem(CONFIG.BACKTEST_STORAGE_KEY, JSON.stringify(state.backtest));
+            
+            const chartData = state.charts[state.activeChartId];
+            if (chartData) {
+                if (chartData.symbol !== state.backtest.symbol) {
+                    await switchChartSymbol(state.activeChartId, state.backtest.symbol);
+                }
+                renderBacktestResults(state.charts[state.activeChartId], result);
+            }
+            if (window.paperTrading) window.paperTrading.renderBacktestSummary(result.summary_stats, result.trades, result.equity_curve);
+            modal.style.display = 'none';
+        } catch (error) {
+            errorEl.textContent = `Error: ${error.message}`;
+            errorEl.style.display = 'block';
+        } finally {
+            loadingEl.style.display = 'none';
+        }
+    };
+}
+
+function renderBacktestResults(chartData, results) {
+    if (!chartData || !results || !chartData.chart) return;
+    if (results.visible === false) return;
+
+    // Clear previous backtest markers/lines
+    if (chartData.backtestMarkers) chartData.backtestMarkers = [];
+    if (chartData.backtestTradeLines) {
+        chartData.backtestTradeLines.forEach(line => {
+            try { chartData.chart.removeSeries(line); } catch(e){}
+        });
+    }
+    chartData.backtestTradeLines = [];
+
+    // Plot trade markers
+    const markers = results.trades.flatMap(trade => [
+        { time: trade.time, position: trade.direction === 'Long' ? 'belowBar' : 'aboveBar', color: trade.direction === 'Long' ? '#3b82f6' : '#f59e0b', shape: trade.direction === 'Long' ? 'arrowUp' : 'arrowDown', text: trade.direction.toUpperCase() },
+        { time: trade.exitTime, position: trade.pnl >= 0 ? 'aboveBar' : 'belowBar', color: trade.pnl >= 0 ? '#10b981' : '#ef4444', shape: 'circle', text: trade.closeReason || 'CLOSE' }
+    ]);
+    chartData.backtestMarkers = markers;
+    updateMarkers(chartData); // Use unified marker update
+
+    // Plot individual trade lines
+    results.trades.forEach(trade => {
+        const lineSeries = chartData.chart.addLineSeries({
+            color: trade.pnl >= 0 ? 'rgba(16, 185, 129, 0.7)' : 'rgba(239, 68, 68, 0.7)',
+            lineWidth: 2,
+            lineStyle: 0, // Solid
+            lastValueVisible: false,
+            priceLineVisible: false,
+        });
+        lineSeries.setData([
+            { time: trade.time, value: trade.entryPrice },
+            { time: trade.exitTime, value: trade.exitPrice }
+        ]);
+        chartData.backtestTradeLines.push(lineSeries);
+        
+        // SL Line Box
+        if (trade.slPrice) {
+            const slSeries = chartData.chart.addLineSeries({
+                color: 'rgba(239, 68, 68, 0.5)',
+                lineWidth: 1,
+                lineStyle: 2, // Dashed
+                lastValueVisible: false,
+                priceLineVisible: false,
+            });
+            slSeries.setData([
+                { time: trade.time, value: trade.slPrice },
+                { time: trade.exitTime, value: trade.slPrice }
+            ]);
+            chartData.backtestTradeLines.push(slSeries);
+        }
+        
+        // TP Line Box
+        if (trade.tpPrice) {
+            const tpSeries = chartData.chart.addLineSeries({
+                color: 'rgba(16, 185, 129, 0.5)',
+                lineWidth: 1,
+                lineStyle: 2, // Dashed
+                lastValueVisible: false,
+                priceLineVisible: false,
+            });
+            tpSeries.setData([
+                { time: trade.time, value: trade.tpPrice },
+                { time: trade.exitTime, value: trade.tpPrice }
+            ]);
+            chartData.backtestTradeLines.push(tpSeries);
+        }
+    });
+
+    // Zoom to fit the backtest period
+    if (results.trades.length > 0) {
+        const from = results.trades[0].time;
+        const to = results.trades[results.trades.length - 1].exitTime;
+        chartData.chart.timeScale().setVisibleRange({ from, to });
     }
 }

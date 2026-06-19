@@ -17,7 +17,7 @@ from typing import Callable, Dict, List
 logger = logging.getLogger(__name__)
 
 
-FetchHandler = Callable[[str, str], Dict]
+FetchHandler = Callable[..., Dict]
 
 
 @dataclass(frozen=True)
@@ -46,11 +46,11 @@ def _empty_payload(source: str, symbol: str, interval: str, error: str = "") -> 
     return payload
 
 
-def fetch_hyperliquid(symbol: str, interval: str) -> Dict:
+def fetch_hyperliquid(symbol: str, interval: str, before_timestamp: Optional[int] = None, limit: int = 1000) -> Dict:
     try:
         from hyperliquid_handler import fetch_hyperliquid_candles
 
-        return fetch_hyperliquid_candles(symbol, interval)
+        return fetch_hyperliquid_candles(symbol, interval, before_timestamp, limit)
     except Exception as exc:
         logger.exception("Error fetching Hyperliquid data")
         return _empty_payload("hyperliquid", symbol, interval, str(exc))
@@ -83,19 +83,28 @@ def register_data_source(
     logger.info("Registered data source: %s", name)
 
 
-def get_historical_data(source: str, symbol: str, interval: str) -> Dict:
+def get_historical_data(source: str, symbol: str, interval: str, before_timestamp: Optional[int] = None, limit: int = 1000) -> Dict:
     source_config = DATA_SOURCES.get(source)
     if not source_config:
         return _empty_payload(source, symbol, interval, f"Unknown source: {source}")
 
     instrument = source_config["instruments"].get(symbol)
     if not instrument:
-        return _empty_payload(source, symbol, interval, f"Unknown symbol: {symbol}")
+        if source == "hyperliquid":
+            instrument = Instrument(
+                symbol=symbol,
+                mapped_symbol=symbol,
+                label=f"{symbol} Perp",
+                source=source,
+                market="Hyperliquid"
+            )
+        else:
+            return _empty_payload(source, symbol, interval, f"Unknown symbol: {symbol}")
 
     if interval not in source_config["timeframes"]:
         return _empty_payload(source, symbol, interval, f"Unsupported timeframe: {interval}")
 
-    payload = source_config["handler"](instrument.mapped_symbol, interval)
+    payload = source_config["handler"](instrument.mapped_symbol, interval, before_timestamp, limit)
     payload["display_symbol"] = instrument.symbol
     payload["label"] = instrument.label
     return payload
@@ -145,6 +154,8 @@ def get_mapped_symbol(source: str, symbol: str) -> str:
 
 
 def validate_symbol(source: str, symbol: str) -> bool:
+    if source == "hyperliquid":
+        return True
     return symbol in DATA_SOURCES.get(source, {}).get("instruments", {})
 
 
