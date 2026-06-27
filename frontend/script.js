@@ -9,6 +9,477 @@ const CONFIG = {
     ALLOWED_COUNTS: [1, 2, 4, 6, 8],
 };
 
+
+function savePrimitiveDrawing(symbol, prim) {
+    if (!state.drawings[symbol]) state.drawings[symbol] = [];
+    const drawings = state.drawings[symbol];
+    
+    // Find index of drawing with same id
+    const idx = drawings.findIndex(d => d.id === prim.id);
+    const serialized = {
+        type: prim.type,
+        id: prim.id,
+        symbol: symbol,
+        p1: prim._p1 ? { time: prim._p1.time, price: prim._p1.price } : null,
+        p2: prim._p2 ? { time: prim._p2.time, price: prim._p2.price } : null,
+        color: prim.color,
+        isFinished: prim.isFinished
+    };
+    if (prim._p3) {
+        serialized.p3 = { time: prim._p3.time, price: prim._p3.price };
+    }
+    if (prim.type === 'text') {
+        serialized.text = prim.text || "Text";
+    }
+    
+    if (idx !== -1) {
+        drawings[idx] = serialized;
+    } else {
+        drawings.push(serialized);
+    }
+    saveDrawings();
+}
+
+function restorePrimitiveDrawings(chartData) {
+    if (window.drawingManager) {
+        window.drawingManager.clearDrawings(chartData);
+        window.drawingManager.chartDrawings[chartData.id] = [];
+        const drawings = state.drawings[chartData.symbol] || [];
+        drawings.forEach(d => {
+            let prim;
+            if (d.type === 'trendline') prim = new DrawingPrimitives.TrendlinePrimitive(d.id);
+            else if (d.type === 'rectangle') prim = new DrawingPrimitives.RectanglePrimitive(d.id);
+            else if (d.type === 'fibonacci') prim = new DrawingPrimitives.FibonacciPrimitive(d.id);
+            else if (d.type === 'text') { prim = new DrawingPrimitives.TextPrimitive(d.id); prim.text = d.text; }
+            else if (d.type === 'longPosition') prim = new DrawingPrimitives.LongPositionPrimitive(d.id);
+            else if (d.type === 'shortPosition') prim = new DrawingPrimitives.ShortPositionPrimitive(d.id);
+            else if (d.type === 'priceRange') prim = new DrawingPrimitives.PriceRangePrimitive(d.id);
+            
+            if (prim) {
+                prim.chartId = chartData.id;
+                if (d.p1) prim.setP1(d.p1.time, d.p1.price);
+                if (d.p2) prim.setP2(d.p2.time, d.p2.price);
+                if (d.p3 && prim.setP3) prim.setP3(d.p3.time, d.p3.price);
+                prim.isFinished = d.isFinished !== false;
+                chartData.candleSeries.attachPrimitive(prim);
+                window.drawingManager.chartDrawings[chartData.id].push(prim);
+            }
+        });
+    }
+}
+
+window.clearAllDrawings = function() {
+    if (!state.charts) return;
+    
+    // Clear from localStorage state
+    Object.keys(state.drawings).forEach(symbol => {
+        state.drawings[symbol] = [];
+    });
+    saveDrawings();
+    
+    // Clear from UI
+    Object.values(state.charts).forEach(chartData => {
+        if (window.drawingManager) {
+            window.drawingManager.clearDrawings(chartData);
+        }
+        if (chartData.renderedDrawings) {
+            Object.values(chartData.renderedDrawings).forEach(priceLine => {
+                try { chartData.candleSeries.removePriceLine(priceLine); } catch(e) {}
+            });
+            chartData.renderedDrawings = {};
+        }
+        if (chartData.candleSeries) {
+            try { chartData.candleSeries.setMarkers([]); } catch(e) {}
+        }
+    });
+};
+
+class DrawingManager {
+    constructor() {
+        this.activeTool = null;
+        this.activeDrawing = null;
+        this.chartDrawings = {};
+    }
+    
+    setTool(tool) {
+        const primitiveTools = ['trendline', 'rectangle', 'fibonacci', 'text', 'longPosition', 'shortPosition', 'priceRange'];
+        if (primitiveTools.includes(tool)) {
+            this.activeTool = tool;
+        } else {
+            this.activeTool = null;
+        }
+        
+        if (this.activeDrawing && (!tool || tool !== this.activeDrawing.type)) {
+            this.activeDrawing = null;
+        }
+        
+        // Disable chart panning if a tool is active
+        const disableInteractions = !!tool && tool !== 'cursor';
+        if (typeof state !== 'undefined' && state.charts) {
+            Object.values(state.charts).forEach(chartData => {
+                if (chartData && chartData.chart) {
+                    chartData.chart.applyOptions({ 
+                        handleScroll: !disableInteractions, 
+                        handleScale: !disableInteractions 
+                    });
+                }
+            });
+        }
+    }
+    
+    _getEventTimePrice(chartData, param) {
+        if (!param.point) return null;
+        const price = chartData.candleSeries.coordinateToPrice(param.point.y);
+        if (price === null) return null;
+        
+        let time = param.time;
+        if (!time) {
+            const logical = param.logical ?? chartData.chart.timeScale().coordinateToLogical(param.point.x);
+            if (logical !== null) {
+                const bars = chartData.cachedData;
+                if (bars && bars.length > 0) {
+                    if (logical >= 0 && logical < bars.length) {
+                        time = bars[Math.round(logical)]?.time;
+                    } else {
+                        const lastBar = bars[bars.length - 1];
+                        const lastTime = lastBar.time;
+                        const lastLogical = bars.length - 1;
+                        const intervalSec = typeof intervalToSeconds === "function" ? intervalToSeconds(chartData.interval) : 60;
+                        const diff = logical - lastLogical;
+                        const baseSec = typeof TimeUtils !== 'undefined' ? TimeUtils._getMs(lastTime) / 1000 : (typeof lastTime === 'object' ? Date.UTC(lastTime.year, lastTime.month - 1, lastTime.day) / 1000 : lastTime);
+                        time = baseSec + Math.round(diff) * intervalSec;
+                    }
+                }
+            }
+        }
+        if (!time) return null;
+        return { time, price };
+    }
+
+    // Helper for shift logic in primitive dragging
+    static getTimeFromLogical(chartData, logical) {
+        if (logical === null || logical === undefined) return null;
+        const bars = chartData.cachedData;
+        if (!bars || bars.length === 0) return null;
+        
+        if (logical >= 0 && logical < bars.length) {
+            const idx = Math.round(logical);
+            return bars[idx] ? bars[idx].time : bars[bars.length - 1].time;
+        } else {
+            // Extrapolate time for bars beyond the loaded data (future zone)
+            const lastBar = bars[bars.length - 1];
+            const lastTime = lastBar.time;
+            const lastLogical = bars.length - 1;
+            const intervalSec = typeof intervalToSeconds === "function" ? intervalToSeconds(chartData.interval) : 60;
+            const diff = logical - lastLogical;
+            const baseSec = typeof TimeUtils !== 'undefined' ? TimeUtils._getMs(lastTime) / 1000 : (typeof lastTime === 'object' ? Date.UTC(lastTime.year, lastTime.month - 1, lastTime.day) / 1000 : lastTime);
+            return baseSec + diff * intervalSec; // exact (not rounded) for smooth handle dragging
+        }
+    }
+
+    handleClick(chartData, param) {
+        const coords = this._getEventTimePrice(chartData, param);
+        if (!coords) return;
+        const { time, price } = coords;
+        
+        if (!this.activeDrawing && this.activeTool) {
+            let primitive;
+            if (this.activeTool === 'trendline') primitive = new DrawingPrimitives.TrendlinePrimitive();
+            else if (this.activeTool === 'rectangle') primitive = new DrawingPrimitives.RectanglePrimitive();
+            else if (this.activeTool === 'fibonacci') primitive = new DrawingPrimitives.FibonacciPrimitive();
+            else if (this.activeTool === 'text') primitive = new DrawingPrimitives.TextPrimitive();
+            else if (this.activeTool === 'longPosition') primitive = new DrawingPrimitives.LongPositionPrimitive();
+            else if (this.activeTool === 'shortPosition') primitive = new DrawingPrimitives.ShortPositionPrimitive();
+            else if (this.activeTool === 'priceRange') primitive = new DrawingPrimitives.PriceRangePrimitive();
+            
+            if (primitive) {
+                primitive.chartId = chartData.id;
+                primitive.setP1(time, price);
+                this.activeDrawing = primitive;
+                chartData.candleSeries.attachPrimitive(primitive);
+                
+                if (!this.chartDrawings[chartData.id]) this.chartDrawings[chartData.id] = [];
+                this.chartDrawings[chartData.id].push(primitive);
+                
+                if (this.activeTool === 'longPosition' || this.activeTool === 'shortPosition') {
+                    const offset = price * 0.005; // 0.5% default offset
+                    const targetPrice = this.activeTool === 'shortPosition' ? price - offset : price + offset;
+                    const stopPrice = this.activeTool === 'shortPosition' ? price + offset : price - offset;
+                    
+                    const intervalSec = typeof intervalToSeconds === "function" ? intervalToSeconds(chartData.interval) : 60;
+                    const baseSec = typeof TimeUtils !== 'undefined' ? TimeUtils._getMs(time) / 1000 : (typeof time === 'object' ? Date.UTC(time.year, time.month - 1, time.day) / 1000 : time);
+                    const futureTime = baseSec + (intervalSec * 15);
+                    
+                    primitive.setP2(futureTime, targetPrice);
+                    if (primitive.setP3) primitive.setP3(futureTime, stopPrice);
+                    
+                    primitive.isFinished = true;
+                    savePrimitiveDrawing(chartData.symbol, primitive);
+                    this.activeDrawing = null;
+                    if (window.setDrawingTool) window.setDrawingTool('cursor');
+                } else if (this.activeTool === 'text') {
+                    const txt = prompt("Enter text:", "Text");
+                    if (txt) {
+                        primitive.text = txt;
+                        primitive.isFinished = true;
+                        savePrimitiveDrawing(chartData.symbol, primitive);
+                    } else {
+                        chartData.candleSeries.detachPrimitive(primitive);
+                        this.chartDrawings[chartData.id].pop();
+                    }
+                    this.activeDrawing = null;
+                    if (window.setDrawingTool) window.setDrawingTool('cursor');
+                }
+            }
+        } else if (this.activeDrawing) {
+            this.activeDrawing.setP2(time, price);
+            this.activeDrawing.isFinished = true;
+            savePrimitiveDrawing(chartData.symbol, this.activeDrawing);
+            this.activeDrawing = null;
+            if (window.setDrawingTool) window.setDrawingTool('cursor');
+        }
+    }
+    
+    handleCrosshairMove(chartData, param) {
+        if (!this.activeDrawing) return;
+        const coords = this._getEventTimePrice(chartData, param);
+        if (!coords) return;
+        this.activeDrawing.setP2(coords.time, coords.price);
+    }
+    
+
+    _findHandle(chartData, px, py, radius = 9) {
+        const drawings = this.chartDrawings[chartData.id] || [];
+        for (const prim of drawings) {
+            if (!prim.isFinished) continue;
+            
+            for (const h of prim.getHandles()) {
+                const dx = h.x - px, dy = h.y - py;
+                if (dx * dx + dy * dy <= radius * radius) {
+                    return { primitive: prim, handleName: h.name, chartData };
+                }
+            }
+            
+            if (prim.isHovered && prim.getDeleteHandle) {
+                const dh = prim.getDeleteHandle();
+                if (dh) {
+                    const dx = dh.x - px, dy = dh.y - py;
+                    if (dx * dx + dy * dy <= 20 * 20) {
+                        return { primitive: prim, handleName: 'delete', chartData };
+                    }
+                }
+            }
+            if (prim.hitTest && prim.hitTest(px, py)) {
+                return { primitive: prim, handleName: 'body', chartData };
+            }
+        }
+        return null;
+    }
+
+    _screenToChart(chartData, container, clientX, clientY) {
+        const rect = container.getBoundingClientRect();
+        const cx = clientX - rect.left;
+        const cy = clientY - rect.top;
+        const logical = chartData.chart.timeScale().coordinateToLogical(cx);
+        if (logical === null) return null;
+        
+        const price = chartData.candleSeries.coordinateToPrice(cy);
+        if (price === null) return null;
+        
+        const bars = chartData.cachedData;
+        if (!bars || bars.length === 0) return null;
+        
+        let time;
+        if (logical >= 0 && logical < bars.length) {
+            const idx = Math.round(logical);
+            if (bars[idx]) {
+                time = bars[idx].time;
+            } else {
+                time = bars[bars.length - 1].time; // Fallback
+            }
+        } else {
+            // Future or before data start. Let's infer time
+            const lastBar = bars[bars.length - 1];
+            const lastTime = lastBar.time;
+            const lastLogical = bars.length - 1;
+            const intervalSec = typeof intervalToSeconds === "function" ? intervalToSeconds(chartData.interval) : 60;
+            const diff = logical - lastLogical;
+            const baseSec = typeof TimeUtils !== 'undefined' ? TimeUtils._getMs(lastTime) / 1000 : (typeof lastTime === 'object' ? Date.UTC(lastTime.year, lastTime.month - 1, lastTime.day) / 1000 : lastTime);
+            time = baseSec + Math.round(diff) * intervalSec;
+            if (!time) {
+                time = lastTime; // fallback
+            }
+        }
+        
+        return { time, price };
+    }
+
+    bindDragHandles(chartData) {
+        const container = document.getElementById(`${chartData.id}-container`);
+        if (!container || container.dataset.dragHandlesBound) return;
+        container.dataset.dragHandlesBound = "true";
+
+        let dragging = null; // { primitive, handleName, chartData }
+
+        const onMouseMove = (e) => {
+            const rect = container.getBoundingClientRect();
+            const px = e.clientX - rect.left;
+            const py = e.clientY - rect.top;
+
+            if (dragging) {
+                const coords = this._screenToChart(chartData, container, e.clientX, e.clientY);
+                if (coords) {
+                    if (dragging.handleName === 'body') {
+                        if (dragging.lastCoords) {
+                            const cx = e.clientX - rect.left;
+                            const logical = chartData.chart.timeScale().coordinateToLogical(cx);
+                            const lastLogical = chartData.chart.timeScale().coordinateToLogical(dragging.lastX);
+                            if (logical !== null && lastLogical !== null) {
+                                const dLogical = logical - lastLogical;
+                                const dPrice = coords.price - dragging.lastCoords.price;
+                                if (dragging.primitive.shift) dragging.primitive.shift(dLogical, dPrice);
+                            }
+                        }
+                        dragging.lastCoords = coords;
+                        dragging.lastX = e.clientX - rect.left;
+                    } else {
+                        dragging.primitive.setHandle(dragging.handleName, coords.time, coords.price);
+                    }
+                }
+                return;
+            }
+
+            // Hover: change cursor when over a handle
+            if (!this.activeTool) {
+                const h = this._findHandle(chartData, px, py);
+                const hoveredPrim = h ? h.primitive : null;
+                
+                let redrawNeeded = false;
+                const drawings = this.chartDrawings[chartData.id] || [];
+                for (const prim of drawings) {
+                    const isHoveredNow = (prim === hoveredPrim);
+                    if (isHoveredNow) {
+                        if (prim._unhoverTimeout) {
+                            clearTimeout(prim._unhoverTimeout);
+                            prim._unhoverTimeout = null;
+                        }
+                        
+                        if (h && h.handleName !== 'delete') {
+                            if (prim._hoverX === undefined || Math.abs(px - prim._hoverX) > 50 || Math.abs(py - prim._hoverY) > 50) {
+                                prim._hoverX = px;
+                                prim._hoverY = py;
+                                prim.updateAllViews();
+                            }
+                        }
+
+                        if (!prim.isHovered) {
+                            prim.isHovered = true;
+                            if (h && h.handleName !== 'delete') {
+                                prim._hoverX = px;
+                                prim._hoverY = py;
+                            }
+                            prim.updateAllViews();
+                        }
+                    } else if (prim.isHovered && !prim._unhoverTimeout) {
+                        prim._unhoverTimeout = setTimeout(() => {
+                            prim.isHovered = false;
+                            prim._hoverX = undefined;
+                            prim._hoverY = undefined;
+                            prim._unhoverTimeout = null;
+                            prim.updateAllViews();
+                        }, 400);
+                    }
+                }
+                
+                if (h && h.handleName === 'delete') {
+                    container.style.cursor = 'pointer';
+                } else {
+                    container.style.cursor = h ? 'grab' : '';
+                }
+            }
+        };
+
+        const onPointerDown = (e) => {
+            const rect = container.getBoundingClientRect();
+            const px = e.clientX - rect.left;
+            const py = e.clientY - rect.top;
+            const h = this._findHandle(chartData, px, py);
+            if (h) {
+                if (h.handleName === 'delete') {
+                    this.removeDrawing(chartData, h.primitive);
+                    return;
+                }
+                dragging = h;
+                container.style.cursor = 'grabbing';
+                // Prevent chart panning
+                e.stopPropagation();
+                e.preventDefault();
+                chartData.chart.applyOptions({ handleScroll: false, handleScale: false });
+
+                const onUp = () => {
+                    if (dragging) {
+                        savePrimitiveDrawing(chartData.symbol, dragging.primitive);
+                    }
+                    dragging = null;
+                    container.style.cursor = '';
+                    chartData.chart.applyOptions({ handleScroll: true, handleScale: true });
+                    window.removeEventListener('pointerup', onUp);
+                    window.removeEventListener('pointermove', onGlobalMove);
+                };
+                const onGlobalMove = (ev) => {
+                    if (!dragging) return;
+                    const coords = this._screenToChart(chartData, container, ev.clientX, ev.clientY);
+                    if (coords) {
+                        if (dragging.handleName === 'body') {
+                            if (dragging.lastCoords) {
+                                const cx = ev.clientX - container.getBoundingClientRect().left;
+                                const logical = chartData.chart.timeScale().coordinateToLogical(cx);
+                                const lastLogical = chartData.chart.timeScale().coordinateToLogical(dragging.lastX);
+                                if (logical !== null && lastLogical !== null) {
+                                    const dLogical = logical - lastLogical;
+                                    const dPrice = coords.price - dragging.lastCoords.price;
+                                    if (dragging.primitive.shift) dragging.primitive.shift(dLogical, dPrice);
+                                }
+                            }
+                            dragging.lastCoords = coords;
+                            dragging.lastX = ev.clientX - container.getBoundingClientRect().left;
+                        } else {
+                            dragging.primitive.setHandle(dragging.handleName, coords.time, coords.price);
+                        }
+                    }
+                };
+                window.addEventListener('pointerup', onUp);
+                window.addEventListener('pointermove', onGlobalMove);
+            }
+        };
+
+        container.addEventListener('pointermove', onMouseMove);
+        // Use capture=true so we intercept before the chart library does
+        container.addEventListener('pointerdown', onPointerDown, { capture: true });
+    }
+
+    removeDrawing(chartData, primitive) {
+        try { chartData.candleSeries.detachPrimitive(primitive); } catch(e) {}
+        if (this.chartDrawings[chartData.id]) {
+            this.chartDrawings[chartData.id] = this.chartDrawings[chartData.id].filter(p => p.id !== primitive.id);
+        }
+        if (state.drawings[chartData.symbol]) {
+            state.drawings[chartData.symbol] = state.drawings[chartData.symbol].filter(d => d.id !== primitive.id);
+            saveDrawings();
+        }
+    }
+
+    clearDrawings(chartData) {
+        if (this.chartDrawings[chartData.id]) {
+            this.chartDrawings[chartData.id].forEach(prim => {
+                try { chartData.candleSeries.detachPrimitive(prim); } catch(e) {}
+            });
+            this.chartDrawings[chartData.id] = [];
+        }
+    }
+}
+window.drawingManager = new DrawingManager();
+
 const COMMON_IDS = {
     "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "BNB": "binancecoin", "XRP": "ripple",
     "DOGE": "dogecoin", "ADA": "cardano", "AVAX": "avalanche-2", "LINK": "chainlink", "DOT": "polkadot",
@@ -170,30 +641,13 @@ async function initializeApp() {
 
     const chartCountEl = document.getElementById("chart-count");
     if (chartCountEl && chartCountEl.parentNode) {
-        const toolsSelect = document.createElement("select");
-        toolsSelect.id = "global-tools-select";
-        toolsSelect.className = "theme-btn";
-        toolsSelect.style.marginLeft = "12px";
-        toolsSelect.innerHTML = `
-            <option value="" disabled selected>Tools</option>
-            <option value="hline">✏️ Horizontal Line</option>
-            <option value="vline">📏 Vertical Line</option>
-            <option value="buyMarker">⬆️ Buy Marker</option>
-            <option value="sellMarker">⬇️ Sell Marker</option>
-            <option value="priceAlert">🔔 Price Alert</option>
-        `;
-        toolsSelect.addEventListener("change", (e) => {
-            const tool = e.target.value;
-            if (tool) {
-                Object.values(state.charts).forEach(chartData => {
-                    chartData.drawingMode = tool;
-                    const container = document.getElementById(`${chartData.id}-container`);
-                    if (container) container.style.cursor = "crosshair";
-                });
-            }
-            e.target.value = "";
-        });
-        chartCountEl.parentNode.appendChild(toolsSelect);
+        const backtestBtn = document.createElement("button");
+        backtestBtn.id = "global-backtest-btn";
+        backtestBtn.className = "theme-btn";
+        backtestBtn.textContent = "📊 Backtest";
+        backtestBtn.style.marginLeft = "12px";
+        backtestBtn.onclick = openBacktestModal;
+        chartCountEl.parentNode.appendChild(backtestBtn);
 
         const tzSelect = document.createElement("select");
         tzSelect.id = "global-tz-select";
@@ -222,26 +676,38 @@ async function initializeApp() {
         const themeBtn = document.createElement("button");
         themeBtn.id = "theme-toggle";
         themeBtn.className = "theme-btn";
-        themeBtn.textContent = state.theme === "dark" ? "☀️ Light Mode" : "🌙 Dark Mode";
+        themeBtn.textContent = state.theme === "dark" ? "☀️" : "🌙";
         themeBtn.style.marginLeft = "12px";
         themeBtn.onclick = toggleTheme;
         chartCountEl.parentNode.appendChild(themeBtn);
 
-        const replayBtn = document.createElement("button");
-        replayBtn.id = "global-replay-btn";
-        replayBtn.className = "theme-btn";
-        replayBtn.textContent = "⏪ Replay";
-        replayBtn.style.marginLeft = "12px";
-        replayBtn.onclick = toggleReplayMode;
-        chartCountEl.parentNode.appendChild(replayBtn);
-
-        const backtestBtn = document.createElement("button");
-        backtestBtn.id = "global-backtest-btn";
-        backtestBtn.className = "theme-btn";
-        backtestBtn.textContent = "📊 Backtest";
-        backtestBtn.style.marginLeft = "12px";
-        backtestBtn.onclick = openBacktestModal;
-        chartCountEl.parentNode.appendChild(backtestBtn);
+        const resetGridBtn = document.createElement("button");
+        resetGridBtn.id = "reset-grid-btn";
+        resetGridBtn.className = "theme-btn";
+        resetGridBtn.title = "Reset chart grid to default equal sizes";
+        resetGridBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Reset Grid`;
+        resetGridBtn.style.marginLeft = "8px";
+        resetGridBtn.onclick = () => {
+            // Clear saved sizes for the current chart count
+            try {
+                const raw = localStorage.getItem(GRID_SIZES_KEY);
+                if (raw) {
+                    const all = JSON.parse(raw);
+                    delete all[state.chartCount];
+                    localStorage.setItem(GRID_SIZES_KEY, JSON.stringify(all));
+                }
+            } catch(e) {}
+            // Re-render grid without saved sizes (CSS defaults kick in)
+            renderGrid();
+            // Brief visual feedback
+            resetGridBtn.textContent = '✓ Reset';
+            resetGridBtn.style.color = 'var(--green)';
+            setTimeout(() => {
+                resetGridBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Reset Grid`;
+                resetGridBtn.style.color = '';
+            }, 1200);
+        };
+        chartCountEl.parentNode.appendChild(resetGridBtn);
 
     }
 
@@ -590,8 +1056,203 @@ function renderGrid() {
         }
     }
 
+    // Reset inline styles before applying new layout to prevent bleed-over
+    grid.style.gridTemplateColumns = '';
+    grid.style.gridTemplateRows = '';
+
+    // Restore saved grid sizes then attach drag handles
+    const savedSizes = getSavedGridSizes(state.chartCount);
+    if (savedSizes) {
+        grid.style.gridTemplateColumns = savedSizes.cols;
+        grid.style.gridTemplateRows    = savedSizes.rows;
+    }
+    if (state.chartCount > 1) initGridResizeHandles(grid, state.chartCount);
+
     setActiveChart('chart-1');
 }
+
+// ── Grid Resize Handles ──────────────────────────────────────────────────────
+const GRID_SIZES_KEY = 'tdc-grid-sizes';
+
+function getSavedGridSizes(count) {
+    try {
+        const raw = localStorage.getItem(GRID_SIZES_KEY);
+        if (!raw) return null;
+        const all = JSON.parse(raw);
+        return all[count] || null;
+    } catch(e) { return null; }
+}
+
+function saveGridSizes(count, cols, rows) {
+    try {
+        const raw = localStorage.getItem(GRID_SIZES_KEY);
+        const all = raw ? JSON.parse(raw) : {};
+        all[count] = { cols, rows };
+        localStorage.setItem(GRID_SIZES_KEY, JSON.stringify(all));
+    } catch(e) {}
+}
+
+function initGridResizeHandles(grid, chartCount) {
+    // Remove stale handles from a previous render
+    grid.querySelectorAll('.grid-resize-handle').forEach(h => h.remove());
+
+    const colMap = { 2: 1, 4: 2, 6: 3, 8: 4 };
+    const rowMap = { 2: 1, 4: 2, 6: 2, 8: 2 };
+    const numCols = colMap[chartCount] || 1;
+    const numRows = rowMap[chartCount] || 1;
+
+    if (numCols < 2 && numRows < 2) return; // Nothing to drag
+
+    // Make the grid position:relative so absolutely-positioned handles align properly
+    grid.style.position = 'relative';
+
+    // Vertical handles (between columns)
+    for (let c = 1; c < numCols; c++) {
+        const handle = document.createElement('div');
+        handle.className = 'grid-resize-handle grid-resize-v';
+        handle.dataset.col = c;
+        handle.title = 'Drag to resize columns';
+        grid.appendChild(handle);
+
+        handle.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            handle.setPointerCapture(e.pointerId);
+            handle.classList.add('dragging');
+
+            const gridRect = grid.getBoundingClientRect();
+            const startX = e.clientX;
+            const computedCols = getComputedStyle(grid).gridTemplateColumns.split(' ').map(parseFloat);
+            const totalFrs = computedCols.reduce((a,b)=>a+b, 0);
+            const pxPerFr = totalFrs > 0 ? gridRect.width / totalFrs : 1;
+
+            const onMove = (ev) => {
+                const dx = ev.clientX - startX;
+                const dFr = dx / pxPerFr;
+                const newCols = [...computedCols];
+                const minFr = 0.15;
+                newCols[c-1] = Math.max(minFr, computedCols[c-1] + dFr);
+                newCols[c]   = Math.max(minFr, computedCols[c]   - dFr);
+                grid.style.gridTemplateColumns = newCols.map(v => v + 'fr').join(' ');
+                positionGridHandles(grid, numCols, numRows);
+            };
+
+            const onUp = () => {
+                handle.classList.remove('dragging');
+                handle.releasePointerCapture(e.pointerId);
+                handle.removeEventListener('pointermove', onMove);
+                handle.removeEventListener('pointerup', onUp);
+                saveGridSizes(chartCount, grid.style.gridTemplateColumns, grid.style.gridTemplateRows);
+                Object.values(state.charts).forEach(cd => {
+                    if (cd.chart) try { cd.chart.applyOptions({}); } catch(err) {}
+                });
+            };
+
+            handle.addEventListener('pointermove', onMove);
+            handle.addEventListener('pointerup', onUp);
+        });
+    }
+
+    // Horizontal handles (between rows)
+    for (let r = 1; r < numRows; r++) {
+        const handle = document.createElement('div');
+        handle.className = 'grid-resize-handle grid-resize-h';
+        handle.dataset.row = r;
+        handle.title = 'Drag to resize rows';
+        grid.appendChild(handle);
+
+        handle.addEventListener('pointerdown', (e) => {
+            e.preventDefault();
+            handle.setPointerCapture(e.pointerId);
+            handle.classList.add('dragging');
+
+            const gridRect = grid.getBoundingClientRect();
+            const startY = e.clientY;
+            const computedRows = getComputedStyle(grid).gridTemplateRows.split(' ').map(parseFloat);
+            const totalFrs = computedRows.reduce((a,b)=>a+b, 0);
+            const pxPerFr = totalFrs > 0 ? gridRect.height / totalFrs : 1;
+
+            const onMove = (ev) => {
+                const dy = ev.clientY - startY;
+                const dFr = dy / pxPerFr;
+                const newRows = [...computedRows];
+                const minFr = 0.15;
+                newRows[r-1] = Math.max(minFr, computedRows[r-1] + dFr);
+                newRows[r]   = Math.max(minFr, computedRows[r]   - dFr);
+                grid.style.gridTemplateRows = newRows.map(v => v + 'fr').join(' ');
+                positionGridHandles(grid, numCols, numRows);
+            };
+
+            const onUp = () => {
+                handle.classList.remove('dragging');
+                handle.releasePointerCapture(e.pointerId);
+                handle.removeEventListener('pointermove', onMove);
+                handle.removeEventListener('pointerup', onUp);
+                saveGridSizes(chartCount, grid.style.gridTemplateColumns, grid.style.gridTemplateRows);
+                Object.values(state.charts).forEach(cd => {
+                    if (cd.chart) try { cd.chart.applyOptions({}); } catch(err) {}
+                });
+            };
+
+            handle.addEventListener('pointermove', onMove);
+            handle.addEventListener('pointerup', onUp);
+        });
+    }
+
+    // Disconnect old observer to prevent memory leaks
+    if (grid._resizeObserver) grid._resizeObserver.disconnect();
+
+    // Position handles after browser lays out the grid
+    requestAnimationFrame(() => positionGridHandles(grid, numCols, numRows));
+
+    // Observer tracks chart panes to keep handles aligned when window resizes
+    grid._resizeObserver = new ResizeObserver(() => positionGridHandles(grid, numCols, numRows));
+    grid.querySelectorAll('.chart-pane').forEach(pane => grid._resizeObserver.observe(pane));
+}
+
+function positionGridHandles(grid, numCols, numRows) {
+    const gridRect = grid.getBoundingClientRect();
+    const children = Array.from(grid.querySelectorAll('.chart-pane'));
+    if (children.length === 0) return;
+
+    // Vertical handles — position at right edge of each column group
+    for (let c = 1; c < numCols; c++) {
+        const handle = grid.querySelector('.grid-resize-v[data-col="' + c + '"]');
+        if (!handle) continue;
+        const idx = c - 1; // rightmost pane of column c-1
+        const pane = children[idx];
+        if (!pane) continue;
+        const pRect = pane.getBoundingClientRect();
+        const right = pRect.right - gridRect.left;
+        handle.style.cssText = [
+            'position:absolute',
+            'top:0',
+            'height:100%',
+            'width:10px',
+            'left:' + (right - 5) + 'px',
+            'z-index:50'
+        ].join(';');
+    }
+
+    // Horizontal handles — position at bottom edge of each row group
+    for (let r = 1; r < numRows; r++) {
+        const handle = grid.querySelector('.grid-resize-h[data-row="' + r + '"]');
+        if (!handle) continue;
+        const idx = (r * numCols) - 1; // last pane of row r-1
+        const pane = children[idx];
+        if (!pane) continue;
+        const pRect = pane.getBoundingClientRect();
+        const bottom = pRect.bottom - gridRect.top;
+        handle.style.cssText = [
+            'position:absolute',
+            'left:0',
+            'width:100%',
+            'height:10px',
+            'top:' + (bottom - 5) + 'px',
+            'z-index:50'
+        ].join(';');
+    }
+}
+
 
 function createChartPane(chartData, index) {
     const pane = document.createElement("section");
@@ -636,9 +1297,14 @@ function createChartPane(chartData, index) {
                     <option value="rsi">RSI ${chartData.indicators.rsiPeriod} (${rsiText})</option>
                     <option value="vwap">VWAP (${vwapText})</option>
                     <option value="atr">ATR ${chartData.indicators.atrPeriod} (${atrText})</option>
+                    <option value="vpvr">Vol Profile (${chartData.indicators.vpvr ? 'On' : 'Off'})</option>
+                    <option value="sessions">Sessions (${chartData.indicators.sessions ? 'On' : 'Off'})</option>
                 </select>
                 <button class="settings-btn" id="${chartData.id}-screenshot" title="Take Screenshot">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                </button>
+                <button class="settings-btn" id="${chartData.id}-replay-toggle" title="Market Replay">
+                    ⏪
                 </button>
                 <button class="settings-btn" id="${chartData.id}-go-live" title="Reset Chart View">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polygon points="5 4 15 12 5 20"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
@@ -665,6 +1331,7 @@ function populatePaneControls(chartData) {
     const indicatorSelect = pane.querySelector(".indicator-select");
     const settingsBtn = pane.querySelector(`#${chartData.id}-settings`);
     const goLiveBtn = pane.querySelector(`#${chartData.id}-go-live`);
+    const replayToggleBtn = pane.querySelector(`#${chartData.id}-replay-toggle`);
 
     input.value = chartData.symbol;
 
@@ -752,15 +1419,18 @@ function populatePaneControls(chartData) {
     goLiveBtn.addEventListener("click", () => {
         if (chartData.chart) {
             chartData.customPriceOffset = 0;
-            if (chartData.candleSeries) {
-                chartData.candleSeries.applyOptions({ autoscaleInfoProvider: null });
-            }
             // Reset zoom (barSpacing) and right margin
             chartData.chart.timeScale().applyOptions({ rightOffset: 7, barSpacing: 8 });
             chartData.chart.timeScale().scrollToRealTime(); // Jump to newest candle
             chartData.chart.priceScale('right').applyOptions({ autoScale: true });
         }
     });
+
+    if (replayToggleBtn) {
+        replayToggleBtn.addEventListener("click", () => {
+            toggleReplayMode(chartData.id);
+        });
+    }
 
     input.addEventListener("input", (e) => {
         dropdown.classList.add("show");
@@ -847,12 +1517,12 @@ function populatePaneControls(chartData) {
     updateIntervalOptions(chartData, intervalSelect);
 
     intervalSelect.addEventListener("change", async () => {
-        const wasReplaying = state.replay && state.replay.active && state.replay.chartId === chartData.id && state.replay.status === 'active';
+        const wasReplaying = chartData.replay && chartData.replay.active && chartData.replay.status === 'active';
         let replayTime = null;
         if (wasReplaying) {
-            const currentCandle = state.replay.fullData[state.replay.currentIndex];
+            const currentCandle = chartData.replay.fullData[chartData.replay.currentIndex];
             if (currentCandle) replayTime = currentCandle.time;
-            if (state.replay.timer) clearTimeout(state.replay.timer);
+            if (chartData.replay.timer) clearTimeout(chartData.replay.timer);
         }
 
         unsubscribeChart(chartData);
@@ -861,8 +1531,8 @@ function populatePaneControls(chartData) {
         await loadChartData(chartData);
         
         if (wasReplaying) {
-            state.replay.fullData = [...chartData.cachedData];
-            startReplayAt(replayTime);
+            chartData.replay.fullData = [...chartData.cachedData];
+            startReplayAt(chartData.id, replayTime);
         }
 
         saveLayoutState();
@@ -938,6 +1608,22 @@ function populatePaneControls(chartData) {
             }
             updateSubchartMargins(chartData);
             e.target.options[7].text = `ATR ${chartData.indicators.atrPeriod} (${chartData.indicators.atr ? 'On' : 'Off'})`;
+        } else if (indicator === "vpvr") {
+            chartData.indicators.vpvr = !chartData.indicators.vpvr;
+            if (chartData.indicators.vpvr) {
+                drawVolumeProfile(chartData);
+            } else {
+                clearVolumeProfile(chartData);
+            }
+            e.target.options[8].text = `Vol Profile (${chartData.indicators.vpvr ? 'On' : 'Off'})`;
+        } else if (indicator === "sessions") {
+            chartData.indicators.sessions = !chartData.indicators.sessions;
+            if (chartData.indicators.sessions) {
+                drawSessionBands(chartData);
+            } else {
+                clearSessionBands(chartData);
+            }
+            e.target.options[9].text = `Sessions (${chartData.indicators.sessions ? 'On' : 'Off'})`;
         }
         e.target.value = ""; // Reset the dropdown back to the "ƒx" placeholder
         saveLayoutState();
@@ -982,8 +1668,31 @@ function changeChartType(chartData) {
     }
     
     if (chartData.lastPrice) updateChartPriceFormat(chartData, chartData.lastPrice);
+
+    chartData.candleSeries.applyOptions({
+        autoscaleInfoProvider: (baseImplementation) => {
+            const res = baseImplementation();
+            if (res !== null && res.priceRange !== null) {
+                const offset = chartData.customPriceOffset || 0;
+                if (offset === 0) return res;
+                const newRes = {
+                    priceRange: {
+                        minValue: res.priceRange.minValue + offset,
+                        maxValue: res.priceRange.maxValue + offset,
+                    }
+                };
+                if (res.margins) newRes.margins = res.margins;
+                return newRes;
+            }
+            return res;
+        }
+    });
+
+
+
     syncChartWithCache(chartData);
     restoreDrawings(chartData);
+    if (typeof restorePrimitiveDrawings === 'function') restorePrimitiveDrawings(chartData);
     if (window.paperTrading && window.paperTrading.updatePositionLines) window.paperTrading.updatePositionLines(chartData);
 }
 
@@ -1005,8 +1714,9 @@ function initializeChart(chartData) {
             secondsVisible: false,
             borderColor: themeOptions.timeScale.borderColor,
             tickMarkFormatter: TimeUtils.formatAxis,
-            rightOffset: 7,
+            rightOffset: 50,          // enough future bars to pan and draw into
             barSpacing: 8,
+            minBarSpacing: 1,
             shiftVisibleRangeOnNewBar: true,
         },
         rightPriceScale: {
@@ -1167,6 +1877,8 @@ function initializeChart(chartData) {
                 chartData.isVerticalPanning = false;
             }
         }
+        
+
     }, { capture: true });
 
     container.addEventListener('mousemove', (e) => {
@@ -1180,37 +1892,23 @@ function initializeChart(chartData) {
             if (dy > 5 && dy > dx) {
                 chartData.isVerticalPanning = true;
                 chartData.verticalPanArmed = false;
-                chartData.panStartPrice = chartData.candleSeries.coordinateToPrice(y);
+                chartData.lastPanY = y;
             } else if (dx > 5) {
                 chartData.verticalPanArmed = false;
             }
         }
 
-        if (chartData.isVerticalPanning && chartData.panStartPrice !== null) {
-            const currentPrice = chartData.candleSeries.coordinateToPrice(y);
-            if (currentPrice !== null) {
-                chartData.chart.priceScale('right').applyOptions({ autoScale: true });
-                const deltaPrice = chartData.panStartPrice - currentPrice;
+        if (chartData.isVerticalPanning) {
+            const p1 = chartData.candleSeries.coordinateToPrice(0);
+            const p2 = chartData.candleSeries.coordinateToPrice(100);
+            if (p1 !== null && p2 !== null) {
+                const pricePerPixel = (p1 - p2) / 100;
+                const dy = y - chartData.lastPanY;
+                const deltaPrice = dy * pricePerPixel;
                 chartData.customPriceOffset = (chartData.customPriceOffset || 0) + deltaPrice;
-                
-                // Reset to native first to break the infinite recursion chain
-                chartData.candleSeries.applyOptions({ autoscaleInfoProvider: null });
-                chartData.candleSeries.applyOptions({
-                    autoscaleInfoProvider: (baseImplementation) => {
-                        const res = baseImplementation();
-                        if (res !== null) {
-                            return {
-                                priceRange: {
-                                    minValue: res.priceRange.minValue + chartData.customPriceOffset,
-                                    maxValue: res.priceRange.maxValue + chartData.customPriceOffset,
-                                },
-                                margins: res.margins || undefined,
-                            };
-                        }
-                        return null;
-                    }
-                });
+                chartData.chart.priceScale('right').applyOptions({ autoScale: true });
             }
+            chartData.lastPanY = y;
         }
 
         // Handle dragging updates
@@ -1612,7 +2310,6 @@ function initializeChart(chartData) {
             }
         } else {
             chartData.customPriceOffset = 0;
-            chartData.candleSeries.applyOptions({ autoscaleInfoProvider: null });
             chartData.chart.timeScale().applyOptions({ rightOffset: 7, barSpacing: 8 });
             chartData.chart.timeScale().scrollToRealTime();
             chartData.chart.priceScale('right').applyOptions({ autoScale: true });
@@ -1622,14 +2319,19 @@ function initializeChart(chartData) {
     chartData.chart.subscribeClick((param) => {
         if (chartData.justDragged) return; // Ignore native clicks resolving immediately after a drag
         
-        if (state.replay && state.replay.status === 'selecting' && state.replay.chartId === chartData.id) {
+        if (chartData.replay && chartData.replay.status === 'selecting') {
             if (param.time) {
-                startReplayAt(param.time);
+                startReplayAt(chartData.id, param.time);
             }
             return;
         }
 
         if (!param.point || !chartData.candleSeries) return;
+        
+        if (window.drawingManager && (window.drawingManager.activeTool || window.drawingManager.activeDrawing)) {
+            window.drawingManager.handleClick(chartData, param);
+            return;
+        }
 
         if (chartData.drawingMode) {
             const price = chartData.candleSeries.coordinateToPrice(param.point.y);
@@ -1666,11 +2368,15 @@ function initializeChart(chartData) {
                 }
             }
             
-            Object.values(state.charts).forEach(cd => {
-                cd.drawingMode = null;
-                const container = document.getElementById(`${cd.id}-container`);
-                if (container) container.style.cursor = "default";
-            });
+            if (window.setDrawingTool) {
+                window.setDrawingTool('cursor');
+            } else {
+                Object.values(state.charts).forEach(cd => {
+                    cd.drawingMode = null;
+                    const container = document.getElementById(`${cd.id}-container`);
+                    if (container) container.style.cursor = "default";
+                });
+            }
             return;
         }
 
@@ -1683,6 +2389,19 @@ function initializeChart(chartData) {
 
     if (typeof chartData.chart.subscribeCrosshairMove === "function") {
         chartData.chart.subscribeCrosshairMove((param) => {
+            if (window.drawingManager && window.drawingManager.activeDrawing) {
+                window.drawingManager.handleCrosshairMove(chartData, param);
+            }
+            
+            // Track if crosshair is hovering inside chart
+            if (param && param.point) {
+                chartData.hoverParam = param;
+            } else {
+                chartData.hoverParam = null;
+            }
+            
+            updateChartLegend(chartData, param);
+            
             if (state.isSyncingCrosshair) return;
             
             state.isSyncingCrosshair = true;
@@ -1718,6 +2437,25 @@ function initializeChart(chartData) {
             priceLineWidth: 1, priceLineStyle: 2, lastValueVisible: false,
         });
     }
+
+    chartData.candleSeries.applyOptions({
+        autoscaleInfoProvider: (baseImplementation) => {
+            const res = baseImplementation();
+            if (res !== null && res.priceRange !== null) {
+                const offset = chartData.customPriceOffset || 0;
+                if (offset === 0) return res;
+                const newRes = {
+                    priceRange: {
+                        minValue: res.priceRange.minValue + offset,
+                        maxValue: res.priceRange.maxValue + offset,
+                    }
+                };
+                if (res.margins) newRes.margins = res.margins;
+                return newRes;
+            }
+            return res;
+        }
+    });
 
     chartData.volumeSeries = chartData.chart.addHistogramSeries({
         color: '#26a69a',
@@ -1819,6 +2557,11 @@ function initializeChart(chartData) {
 
     updateSubchartMargins(chartData);
 
+    // Bind drawing handle drag events for the drawing manager
+    if (window.drawingManager) {
+        window.drawingManager.bindDragHandles(chartData);
+    }
+
     // Add diagnostics requested for wheel event investigation
     setTimeout(() => runWheelDiagnostics(chartData.id), 1000);
 }
@@ -1827,9 +2570,6 @@ function resetChart(chartData) {
     chartData.isFetchingHistory = false;
     chartData.hasReachedBeginning = false;
     chartData.customPriceOffset = 0;
-    if (chartData.candleSeries) {
-        chartData.candleSeries.applyOptions({ autoscaleInfoProvider: null });
-    }
     chartData.currentCandle = null;
     chartData.lastPrice = null;
     chartData.referencePrice = null;
@@ -2293,8 +3033,8 @@ window.refreshChartMarkers = () => {
 function updateMarkers(chartData) {
     if (!chartData.candleSeries) return;
     
-    if (state.replay && state.replay.active && state.replay.chartId === chartData.id && state.replay.status === 'active') {
-        updateReplayMarkers();
+    if (chartData.replay && chartData.replay.active && chartData.replay.status === 'active') {
+        updateReplayMarkers(chartData.id);
         return;
     }
 
@@ -2602,12 +3342,23 @@ async function loadOlderHistoricalData(chartData) {
         
         oldCandles.sort((a, b) => a.time - b.time);
         
+        // Remove duplicates that overlap with existing data
+        const firstTime = chartData.cachedData.length > 0 ? chartData.cachedData[0].time : Infinity;
+        oldCandles = oldCandles.filter(c => c.time < firstTime);
+        
+        if (oldCandles.length === 0) {
+            chartData.hasReachedBeginning = true;
+            chartData.isFetchingHistory = false;
+            return;
+        }
+        
         // Safely prepend the older data
         chartData.cachedData = [...oldCandles, ...chartData.cachedData];
         
         // Re-calculate indicators smoothly and push into existing series arrays
         syncChartWithCache(chartData);
         restoreDrawings(chartData);
+    if (typeof restorePrimitiveDrawings === 'function') restorePrimitiveDrawings(chartData);
         if (typeof updateMarkers === 'function') updateMarkers(chartData);
         
         chartData.isFetchingHistory = false;
@@ -2649,6 +3400,7 @@ async function loadChartData(chartData) {
     }
     try {
         setDataStatus(`Loading ${chartData.symbol} ${chartData.interval}`);
+        chartData.isFetchingHistory = true;
         
         const response = await fetch(`${CONFIG.API_BASE}/history?symbol=${chartData.symbol}&timeframe=${chartData.interval}&limit=1000`);
         const payload = await response.json();
@@ -2692,6 +3444,7 @@ async function loadChartData(chartData) {
         }
 
         restoreDrawings(chartData);
+    if (typeof restorePrimitiveDrawings === 'function') restorePrimitiveDrawings(chartData);
 
         updateTicker(chartData, chartData.currentCandle.close, chartData.referencePrice);
         clearPaneMessage(chartData.id);
@@ -2705,6 +3458,8 @@ async function loadChartData(chartData) {
     } catch (error) {
         setPaneMessage(chartData.id, error.message);
         setDataStatus(error.message);
+    } finally {
+        chartData.isFetchingHistory = false;
     }
 }
 
@@ -2719,7 +3474,27 @@ function syncChartWithCache(chartData) {
         mainData = chartData.cachedData.map(c => ({ time: c.time, value: c.close }));
     }
     
-    chartData.candleSeries.setData(mainData);
+    let finalData = mainData;
+    if (mainData.length > 0) {
+        const lastCandle = mainData[mainData.length - 1];
+        let lastTime;
+        if (typeof lastCandle.time === 'object' && lastCandle.time !== null) {
+            lastTime = Date.UTC(lastCandle.time.year, lastCandle.time.month - 1, lastCandle.time.day) / 1000;
+        } else if (typeof lastCandle.time === 'string') {
+            lastTime = new Date(lastCandle.time).getTime() / 1000;
+        } else {
+            lastTime = Number(lastCandle.time);
+        }
+        
+        const intervalSec = getIntervalSeconds(chartData.interval);
+        const futureWhitespace = [];
+        for (let i = 1; i <= 150; i++) {
+            futureWhitespace.push({ time: lastTime + i * intervalSec });
+        }
+        finalData = mainData.concat(futureWhitespace);
+    }
+    
+    chartData.candleSeries.setData(finalData);
     
     if (chartData.indicators.volume && chartData.volumeSeries) {
         chartData.volumeSeries.setData(chartData.cachedData.map(c => ({
@@ -2749,6 +3524,12 @@ function syncChartWithCache(chartData) {
     if (chartData.indicators.atr && chartData.atrSeries) {
         chartData.atrSeries.setData(calculateATR(chartData.cachedData, chartData.indicators.atrPeriod));
     }
+    
+    // Redraw canvas-based overlays after data changes
+    if (chartData.indicators.vpvr) drawVolumeProfile(chartData);
+    if (chartData.indicators.sessions) drawSessionBands(chartData);
+    
+    updateChartLegend(chartData);
 }
 
 function normalizeCandle(candle) {
@@ -2828,7 +3609,7 @@ function unsubscribeChart(chartData) {
 function handlePriceUpdate(tick) {
     Object.values(state.charts).forEach(chartData => {
         if (chartData.source !== tick.source || chartData.symbol !== tick.symbol) return;
-        if (state.replay && state.replay.active && state.replay.chartId === chartData.id) return;
+        if (chartData.replay && chartData.replay.active) return;
         applyPriceUpdate(chartData, tick);
     });
 }
@@ -2848,9 +3629,12 @@ function applyPriceUpdate(chartData, tick) {
         const last = chartData.cachedData[chartData.cachedData.length - 1];
         if (last.time === candle.time) {
             chartData.cachedData[chartData.cachedData.length - 1] = candle;
-        } else {
+        } else if (candle.time > last.time) {
             chartData.cachedData.push(candle);
             chartData.isNewBar = true;
+        } else {
+            // Ignore out of order / older WS ticks to prevent breaking ascending sort
+            return;
         }
     } else {
         chartData.cachedData.push(candle);
@@ -2886,6 +3670,8 @@ function handleCrosshairSync(sourceChartData, param) {
         Object.values(state.charts).forEach(target => {
             const crosshairEl = document.getElementById(`${target.id}-sync-crosshair`);
             if (crosshairEl) crosshairEl.style.display = 'none';
+            target.hoverParam = null;
+            updateChartLegend(target);
         });
         return;
     }
@@ -2999,9 +3785,9 @@ function handleCrosshairSync(sourceChartData, param) {
             let targetY = null;
             const targetTimeScale = target.chart.timeScale();
 
+            let targetIdx = -1;
             if (sourceTimeSec !== null && target.cachedData.length > 0) {
                 let low = 0; let high = target.cachedData.length - 1;
-                let targetIdx = -1;
                 while (low <= high) {
                     const mid = Math.floor((low + high) / 2);
                     const current = target.cachedData[mid];
@@ -3033,6 +3819,14 @@ function handleCrosshairSync(sourceChartData, param) {
                         }
                     }
                 }
+            }
+
+            if (targetIdx !== -1) {
+                target.hoverParam = { time: target.cachedData[targetIdx].time };
+                updateChartLegend(target, targetIdx);
+            } else {
+                target.hoverParam = null;
+                updateChartLegend(target);
             }
 
             if (hoveredPrice !== null) {
@@ -3083,6 +3877,8 @@ function handleCrosshairSync(sourceChartData, param) {
         } else {
             const crosshairEl = document.getElementById(`${target.id}-sync-crosshair`);
             if (crosshairEl) crosshairEl.style.display = 'none';
+            target.hoverParam = null;
+            updateChartLegend(target);
         }
     });
 }
@@ -3128,7 +3924,25 @@ function flushChartUpdate(chartData) {
         seriesUpdate = candle;
     }
 
+    if (!seriesUpdate || seriesUpdate.time == null || Number.isNaN(seriesUpdate.time) || Number.isNaN(seriesUpdate.close)) {
+        console.error("INVALID SERIES UPDATE:", seriesUpdate);
+        return;
+    }
     chartData.candleSeries.update(seriesUpdate);
+    
+    if (isNewBar) {
+        const intervalSec = getIntervalSeconds(chartData.interval);
+        let lastTime;
+        if (typeof candle.time === 'object' && candle.time !== null) {
+            lastTime = Date.UTC(candle.time.year, candle.time.month - 1, candle.time.day) / 1000;
+        } else if (typeof candle.time === 'string') {
+            lastTime = new Date(candle.time).getTime() / 1000;
+        } else {
+            lastTime = Number(candle.time);
+        }
+        const futureTime = lastTime + 150 * intervalSec;
+        chartData.candleSeries.update({ time: futureTime });
+    }
     
     if (chartData.indicators.volume) {
         chartData.volumeSeries.update({
@@ -3193,6 +4007,11 @@ function flushChartUpdate(chartData) {
             updateTicker(chartData, chartData.lastPrice, chartData.referencePrice);
             flashTicker(chartData.id, chartData.flashDirection);
             updateChartCountdown(chartData, now);
+            
+            if (!chartData.hoverParam) {
+                updateChartLegend(chartData);
+            }
+            
             chartData.lastUIUpdate = now;
             
             if (state.chartCount === 1 && chartData.id === 'chart-1') {
@@ -3238,6 +4057,323 @@ function bucketTime(time, interval) {
         "1d": 86400,
     }[interval] || 60;
     return Math.floor(time / seconds) * seconds;
+}
+
+const eyeSvg   = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+const eyeOffSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+const gearSvg  = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
+const trashSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>`;
+
+function updateChartLegend(chartData, indexOrParam = null) {
+    const container = document.getElementById(`${chartData.id}-container`);
+    if (!container) return;
+
+    let legendEl = container.querySelector(".chart-legend");
+    if (!legendEl) {
+        legendEl = document.createElement("div");
+        legendEl.className = "chart-legend";
+        container.appendChild(legendEl);
+        
+        legendEl.addEventListener('click', (e) => {
+            const btn = e.target.closest('.legend-ind-btn');
+            if (!btn) return;
+            const action = btn.dataset.action;
+            const indType = btn.dataset.ind;
+            
+            if (action === 'toggle') {
+                toggleIndicatorVisibility(chartData, indType);
+            } else if (action === 'settings') {
+                openSettingsModal(chartData);
+                setTimeout(() => {
+                    const tabs = document.querySelectorAll('#chart-settings-modal .sp-tab');
+                    tabs.forEach(t => {
+                        if (t.dataset.tab === indType) t.click();
+                    });
+                }, 100);
+            } else if (action === 'delete') {
+                chartData.indicators[indType] = false;
+                if (indType === 'volume' && chartData.volumeSeries) {
+                    chartData.candleSeries.priceScale().applyOptions({ autoScale: true });
+                    chartData.volumeSeries.applyOptions({ visible: false });
+                } else if (indType === 'sma' && chartData.smaSeries) {
+                    chartData.smaSeries.applyOptions({ visible: false });
+                } else if (indType === 'ema' && chartData.emaSeries) {
+                    chartData.emaSeries.applyOptions({ visible: false });
+                } else if (indType === 'bb') {
+                    if (chartData.bbUpperSeries) chartData.bbUpperSeries.applyOptions({ visible: false });
+                    if (chartData.bbMiddleSeries) chartData.bbMiddleSeries.applyOptions({ visible: false });
+                    if (chartData.bbLowerSeries) chartData.bbLowerSeries.applyOptions({ visible: false });
+                } else if (indType === 'rsi' && chartData.rsiSeries) {
+                    chartData.rsiSeries.applyOptions({ visible: false });
+                } else if (indType === 'vwap' && chartData.vwapSeries) {
+                    chartData.vwapSeries.applyOptions({ visible: false });
+                } else if (indType === 'atr' && chartData.atrSeries) {
+                    chartData.atrSeries.applyOptions({ visible: false });
+                } else if (indType === 'vpvr') {
+                    clearVolumeProfile(chartData);
+                } else if (indType === 'sessions') {
+                    clearSessionBands(chartData);
+                }
+                
+                const pane = document.getElementById(chartData.id);
+                const select = pane ? pane.querySelector('.indicator-select') : null;
+                if (select) {
+                    if (indType === 'volume') select.options[1].text = `Volume (Off)`;
+                    else if (indType === 'sma') select.options[2].text = `SMA ${chartData.indicators.smaPeriod} (Off)`;
+                    else if (indType === 'ema') select.options[3].text = `EMA ${chartData.indicators.emaPeriod} (Off)`;
+                    else if (indType === 'bb') select.options[4].text = `BB ${chartData.indicators.bbPeriod} (Off)`;
+                    else if (indType === 'rsi') select.options[5].text = `RSI ${chartData.indicators.rsiPeriod} (Off)`;
+                    else if (indType === 'vwap') select.options[6].text = `VWAP (Off)`;
+                    else if (indType === 'atr') select.options[7].text = `ATR ${chartData.indicators.atrPeriod} (Off)`;
+                    else if (indType === 'vpvr') select.options[8].text = `Vol Profile (Off)`;
+                    else if (indType === 'sessions') select.options[9].text = `Sessions (Off)`;
+                }
+ 
+                updateSubchartMargins(chartData);
+                saveLayoutState();
+                
+                delete legendEl.dataset.structKey;
+                updateChartLegend(chartData);
+            }
+        });
+    }
+
+    let ohlc = null;
+    let volume = null;
+    let timeVal = null;
+
+    const cached = chartData.cachedData || [];
+    let idx = cached.length - 1;
+
+    let paramHasData = false;
+    let seriesDataMap = null;
+
+    if (indexOrParam !== null) {
+        if (typeof indexOrParam === "number") {
+            idx = indexOrParam;
+        } else if (indexOrParam.time) {
+            const hoveredTime = indexOrParam.time;
+            idx = cached.findIndex(c => c.time === hoveredTime);
+            if (idx === -1) idx = cached.length - 1;
+            if (indexOrParam.seriesData) {
+                paramHasData = true;
+                seriesDataMap = indexOrParam.seriesData;
+            }
+        }
+    }
+
+    if (idx >= 0 && idx < cached.length) {
+        const bar = cached[idx];
+        ohlc = {
+            open: bar.open,
+            high: bar.high,
+            low: bar.low,
+            close: bar.close
+        };
+        volume = bar.volume;
+        timeVal = bar.time;
+    }
+
+    let smaVal = null;
+    let emaVal = null;
+    let bbUpper = null, bbMiddle = null, bbLower = null;
+    let rsiVal = null;
+    let vwapVal = null;
+    let atrVal = null;
+
+    if (paramHasData) {
+        if (chartData.smaSeries) { const d = seriesDataMap.get(chartData.smaSeries); smaVal = d ? (d.value !== undefined ? d.value : d) : null; }
+        if (chartData.emaSeries) { const d = seriesDataMap.get(chartData.emaSeries); emaVal = d ? (d.value !== undefined ? d.value : d) : null; }
+        if (chartData.rsiSeries) { const d = seriesDataMap.get(chartData.rsiSeries); rsiVal = d ? (d.value !== undefined ? d.value : d) : null; }
+        if (chartData.vwapSeries) { const d = seriesDataMap.get(chartData.vwapSeries); vwapVal = d ? (d.value !== undefined ? d.value : d) : null; }
+        if (chartData.atrSeries) { const d = seriesDataMap.get(chartData.atrSeries); atrVal = d ? (d.value !== undefined ? d.value : d) : null; }
+        if (chartData.bbUpperSeries && chartData.bbMiddleSeries && chartData.bbLowerSeries) {
+            const u = seriesDataMap.get(chartData.bbUpperSeries); bbUpper = u ? (u.value !== undefined ? u.value : u) : null;
+            const m = seriesDataMap.get(chartData.bbMiddleSeries); bbMiddle = m ? (m.value !== undefined ? m.value : m) : null;
+            const l = seriesDataMap.get(chartData.bbLowerSeries); bbLower = l ? (l.value !== undefined ? l.value : l) : null;
+        }
+    } else {
+        if (chartData.indicators.sma) smaVal = calculateLatestSMA(chartData.cachedData, chartData.indicators.smaPeriod)?.value;
+        if (chartData.indicators.ema) emaVal = calculateLatestEMA(chartData.cachedData, chartData.indicators.emaPeriod)?.value;
+        if (chartData.indicators.rsi) rsiVal = calculateLatestRSI(chartData.cachedData, chartData.indicators.rsiPeriod)?.value;
+        if (chartData.indicators.vwap) vwapVal = calculateLatestVWAP(chartData.cachedData, chartData.interval)?.value;
+        if (chartData.indicators.atr) atrVal = calculateLatestATR(chartData.cachedData, chartData.indicators.atrPeriod)?.value;
+        if (chartData.indicators.bb) {
+            const bb = calculateLatestBB(chartData.cachedData, chartData.indicators.bbPeriod, chartData.indicators.bbStdDev);
+            if (bb) { bbUpper = bb.upper?.value; bbMiddle = bb.middle?.value; bbLower = bb.lower?.value; }
+        }
+    }
+
+    let ohlcHtml = "";
+    let diff = 0, pct = 0, colorClass = "", sign = "", formattedTime = "";
+    if (ohlc) {
+        diff = ohlc.close - ohlc.open;
+        pct = ohlc.open ? (diff / ohlc.open) * 100 : 0;
+        colorClass = diff >= 0 ? "legend-up" : "legend-down";
+        sign = diff >= 0 ? "+" : "";
+        formattedTime = TimeUtils.formatTooltip(timeVal);
+
+        ohlcHtml = `
+            <span class="legend-symbol-name">${chartData.symbol}</span>
+            <span class="legend-interval">${chartData.interval}</span>
+            <span class="legend-ohlc-label">O</span><span class="legend-ohlc-val ${colorClass}">${formatPrice(ohlc.open)}</span>
+            <span class="legend-ohlc-label">H</span><span class="legend-ohlc-val ${colorClass}">${formatPrice(ohlc.high)}</span>
+            <span class="legend-ohlc-label">L</span><span class="legend-ohlc-val ${colorClass}">${formatPrice(ohlc.low)}</span>
+            <span class="legend-ohlc-label">C</span><span class="legend-ohlc-val ${colorClass}">${formatPrice(ohlc.close)}</span>
+            <span class="legend-ohlc-val ${colorClass}">${sign}${formatPrice(diff)} (${sign}${pct.toFixed(2)}%)</span>
+            <span class="legend-ohlc-val" style="color: var(--muted); margin-left: 8px;">${formattedTime}</span>
+        `;
+    } else {
+        ohlcHtml = `<span class="legend-symbol-name">${chartData.symbol === 'none' ? 'No Chart' : chartData.symbol}</span>`;
+    }
+
+    let indRows = [];
+    const ind = chartData.indicators;
+    
+    if (ind && ind.volume) {
+        indRows.push({ type: 'volume', label: 'Vol', value: volume != null ? formatPrice(volume) : '—', color: '#8b9bb0', noSettings: true, visible: chartData.volumeSeries ? chartData.volumeSeries.options().visible !== false : true });
+    }
+    if (ind && ind.sma) {
+        indRows.push({ type: 'sma', label: `SMA ${ind.smaPeriod}`, value: smaVal != null ? formatPrice(smaVal) : '—', color: ind.smaColor, visible: chartData.smaSeries ? chartData.smaSeries.options().visible !== false : true });
+    }
+    if (ind && ind.ema) {
+        indRows.push({ type: 'ema', label: `EMA ${ind.emaPeriod}`, value: emaVal != null ? formatPrice(emaVal) : '—', color: ind.emaColor, visible: chartData.emaSeries ? chartData.emaSeries.options().visible !== false : true });
+    }
+    if (ind && ind.bb) {
+        const bbStr = bbMiddle != null ? `${formatPrice(bbUpper)}, ${formatPrice(bbMiddle)}, ${formatPrice(bbLower)}` : '—';
+        indRows.push({ type: 'bb', label: `BB ${ind.bbPeriod}`, value: bbStr, color: ind.bbColor, visible: chartData.bbUpperSeries ? chartData.bbUpperSeries.options().visible !== false : true });
+    }
+    if (ind && ind.rsi) {
+        indRows.push({ type: 'rsi', label: `RSI ${ind.rsiPeriod}`, value: rsiVal != null ? rsiVal.toFixed(2) : '—', color: ind.rsiColor, visible: chartData.rsiSeries ? chartData.rsiSeries.options().visible !== false : true });
+    }
+    if (ind && ind.vwap) {
+        indRows.push({ type: 'vwap', label: 'VWAP', value: vwapVal != null ? formatPrice(vwapVal) : '—', color: ind.vwapColor, visible: chartData.vwapSeries ? chartData.vwapSeries.options().visible !== false : true });
+    }
+    if (ind && ind.atr) {
+        indRows.push({ type: 'atr', label: `ATR ${ind.atrPeriod}`, value: atrVal != null ? formatPrice(atrVal) : '—', color: ind.atrColor, visible: chartData.atrSeries ? chartData.atrSeries.options().visible !== false : true });
+    }
+    if (ind && ind.vpvr) {
+        const pocVal = chartData.vpvrPocPrice != null ? formatPrice(chartData.vpvrPocPrice) : '—';
+        indRows.push({ type: 'vpvr', label: 'VPVR', value: `POC: ${pocVal}`, color: '#facc15', noSettings: true, visible: chartData.indicators.vpvrVisible !== false });
+    }
+    if (ind && ind.sessions) {
+        let sessionsVal = '—';
+        if (timeVal) {
+            const d = new Date(timeVal * 1000);
+            const y = d.getUTCFullYear();
+            const m = d.getUTCMonth();
+            const dateNum = d.getUTCDate();
+            
+            const active = [];
+            if (typeof SESSIONS !== 'undefined') {
+                for (const session of SESSIONS) {
+                    const startUtc = Date.UTC(y, m, dateNum, session.startH, 0, 0) / 1000;
+                    const endUtc   = Date.UTC(y, m, dateNum, session.endH,   0, 0) / 1000;
+                    if (timeVal >= startUtc && timeVal <= endUtc) {
+                        active.push(session.name);
+                    }
+                }
+            }
+            sessionsVal = active.length > 0 ? active.join(', ') : 'None';
+        }
+        indRows.push({ type: 'sessions', label: 'Sessions', value: sessionsVal, color: '#60a5fa', noSettings: true, visible: chartData.indicators.sessionsVisible !== false });
+    }
+
+    const structKey = chartData.symbol + '_' + chartData.interval + '_' + (ohlc !== null) + '_' + JSON.stringify(indRows.map(r => r.type + r.visible + r.color + r.label));
+    
+    if (legendEl.dataset.structKey === structKey) {
+        if (ohlc) {
+            const ohlcVals = legendEl.querySelectorAll('.legend-ohlc-val');
+            if (ohlcVals.length === 6) {
+                ohlcVals[0].textContent = formatPrice(ohlc.open);
+                ohlcVals[1].textContent = formatPrice(ohlc.high);
+                ohlcVals[2].textContent = formatPrice(ohlc.low);
+                ohlcVals[3].textContent = formatPrice(ohlc.close);
+                ohlcVals[4].textContent = `${sign}${formatPrice(diff)} (${sign}${pct.toFixed(2)}%)`;
+                ohlcVals[5].textContent = formattedTime;
+                for(let i=0; i<5; i++) {
+                    ohlcVals[i].className = `legend-ohlc-val ${colorClass}`;
+                }
+            }
+        }
+        
+        indRows.forEach(row => {
+            if (row.value !== '—' || indexOrParam !== null) {
+                const valEl = legendEl.querySelector(`.legend-ind-row[data-ind="${row.type}"] .legend-ind-val`);
+                if (valEl) valEl.textContent = row.value;
+            }
+        });
+        return;
+    }
+    
+    legendEl.dataset.structKey = structKey;
+
+    let indicatorsHtml = "";
+    if (indRows.length > 0) {
+        indicatorsHtml = `<div class="indicators-list">` + indRows.map(row => `
+            <div class="legend-ind-row" data-ind="${row.type}" style="${row.visible === false ? 'opacity: 0.5;' : ''}">
+                <span class="legend-ind-dot" style="background:${row.color};"></span>
+                <span class="legend-ind-title" style="color:${row.color};">${row.label}</span>
+                <span class="legend-ind-val">${row.value}</span>
+                <span class="legend-ind-actions">
+                    <button class="legend-ind-btn" data-action="toggle" data-ind="${row.type}" title="Hide/Show">${row.visible !== false ? eyeSvg : eyeOffSvg}</button>
+                    ${!row.noSettings ? `<button class="legend-ind-btn" data-action="settings" data-ind="${row.type}" title="Settings">${gearSvg}</button>` : ''}
+                    <button class="legend-ind-btn trash-btn" data-action="delete" data-ind="${row.type}" title="Delete">${trashSvg}</button>
+                </span>
+            </div>
+        `).join('') + `</div>`;
+    }
+
+    legendEl.innerHTML = `
+        <div class="legend-row main-ohlc">${ohlcHtml}</div>
+        ${indicatorsHtml}
+    `;
+}
+
+function toggleIndicatorVisibility(chartData, indType) {
+    if (indType === "volume" && chartData.volumeSeries) {
+        const v = !chartData.volumeSeries.options().visible;
+        chartData.volumeSeries.applyOptions({ visible: v });
+        updateSubchartMargins(chartData);
+    } else if (indType === "sma" && chartData.smaSeries) {
+        chartData.smaSeries.applyOptions({ visible: !chartData.smaSeries.options().visible });
+    } else if (indType === "ema" && chartData.emaSeries) {
+        chartData.emaSeries.applyOptions({ visible: !chartData.emaSeries.options().visible });
+    } else if (indType === "bb" && chartData.bbUpperSeries) {
+        const v = !chartData.bbUpperSeries.options().visible;
+        chartData.bbUpperSeries.applyOptions({ visible: v });
+        if (chartData.bbMiddleSeries) chartData.bbMiddleSeries.applyOptions({ visible: v });
+        if (chartData.bbLowerSeries) chartData.bbLowerSeries.applyOptions({ visible: v });
+    } else if (indType === "rsi" && chartData.rsiSeries) {
+        const v = !chartData.rsiSeries.options().visible;
+        chartData.rsiSeries.applyOptions({ visible: v });
+        updateSubchartMargins(chartData);
+    } else if (indType === "vwap" && chartData.vwapSeries) {
+        chartData.vwapSeries.applyOptions({ visible: !chartData.vwapSeries.options().visible });
+    } else if (indType === "atr" && chartData.atrSeries) {
+        const v = !chartData.atrSeries.options().visible;
+        chartData.atrSeries.applyOptions({ visible: v });
+        updateSubchartMargins(chartData);
+    } else if (indType === "vpvr") {
+        chartData.indicators.vpvrVisible = (chartData.indicators.vpvrVisible !== false) ? false : true;
+        const canvas = _ensureVPCanvas(chartData);
+        if (canvas) canvas.style.display = chartData.indicators.vpvrVisible ? 'block' : 'none';
+        if (chartData.indicators.vpvrVisible) {
+            drawVolumeProfile(chartData);
+        } else {
+            clearVolumeProfile(chartData);
+        }
+    } else if (indType === "sessions") {
+        chartData.indicators.sessionsVisible = (chartData.indicators.sessionsVisible !== false) ? false : true;
+        const canvas = _ensureSessionCanvas(chartData);
+        if (canvas) canvas.style.display = chartData.indicators.sessionsVisible ? 'block' : 'none';
+        if (chartData.indicators.sessionsVisible) {
+            drawSessionBands(chartData);
+        } else {
+            clearSessionBands(chartData);
+        }
+    }
+    updateChartLegend(chartData);
 }
 
 function updateTicker(chartData, price, reference) {
@@ -3446,8 +4582,8 @@ function switchChartSymbol(chartId, newSymbol) {
     const chartData = state.charts[chartId];
     if (!chartData || chartData.symbol === newSymbol) return;
 
-    if (state.replay && state.replay.active && state.replay.chartId === chartId) {
-        exitReplayMode();
+    if (chartData.replay && chartData.replay.active) {
+        exitReplayMode(chartId);
     }
 
     if (newSymbol === 'none') {
@@ -4624,7 +5760,7 @@ function toggleTheme() {
     document.body.classList.toggle("light-theme", isLight);
     
     const btn = document.getElementById("theme-toggle");
-    if (btn) btn.textContent = isLight ? "🌙 Dark Mode" : "☀️ Light Mode";
+    if (btn) btn.textContent = isLight ? "🌙" : "☀️";
     
     const themeOptions = getChartThemeOptions(isLight);
     Object.values(state.charts).forEach(chartData => {
@@ -4638,6 +5774,7 @@ function toggleTheme() {
             });
         }
         restoreDrawings(chartData);
+    if (typeof restorePrimitiveDrawings === 'function') restorePrimitiveDrawings(chartData);
         chartData.isSyncedCrosshairActive = false;
     });
 }
@@ -5366,27 +6503,29 @@ function renderOrderBook(data) {
 
 // --- Market Replay Engine ---
 
-function toggleReplayMode() {
-    if (state.replay && state.replay.active) {
-        exitReplayMode();
+function toggleReplayMode(chartId) {
+    const chartData = state.charts[chartId];
+    if (chartData.replay && chartData.replay.active) {
+        exitReplayMode(chartId);
     } else {
-        startReplaySelection();
+        startReplaySelection(chartId);
     }
 }
 
-function startReplaySelection() {
-    const activeChart = state.charts[state.activeChartId];
+function startReplaySelection(chartId) {
+    const activeChart = state.charts[chartId];
     if (!activeChart || !activeChart.cachedData || activeChart.cachedData.length === 0) {
         alert("Please load a chart first.");
         return;
     }
     
-    document.getElementById("global-replay-btn").textContent = "Cancel Replay";
+    const btn = document.getElementById(`${chartId}-replay-toggle`);
+    if (btn) btn.style.background = "rgba(59, 130, 246, 0.2)";
     
-    state.replay = {
+    activeChart.replay = {
         active: true,
         status: 'selecting',
-        chartId: state.activeChartId,
+        chartId: chartId,
         speed: 1, 
         isPlaying: false,
         timer: null,
@@ -5406,8 +6545,9 @@ function startReplaySelection() {
     setPaneMessage(activeChart.id, "Click on any historical candle to start replay from there");
 }
 
-function startReplayAt(time) {
-    const chartData = state.charts[state.replay.chartId];
+function startReplayAt(chartId, time) {
+    const chartData = state.charts[chartId];
+    if (!chartData || !chartData.replay) return;
     clearPaneMessage(chartData.id);
     
     const container = document.getElementById(`${chartData.id}-container`);
@@ -5415,55 +6555,75 @@ function startReplayAt(time) {
     
     let msTime = typeof time === 'object' ? TimeUtils._getMs(time) / 1000 : time;
     
-    let idx = state.replay.fullData.findIndex(c => c.time === msTime);
+    let idx = chartData.replay.fullData.findIndex(c => c.time === msTime);
     if (idx === -1) {
-        idx = state.replay.fullData.findIndex(c => c.time >= msTime);
+        idx = chartData.replay.fullData.findIndex(c => c.time >= msTime);
         if (idx === -1) idx = 0;
     }
     
-    state.replay.currentIndex = idx;
-    state.replay.status = 'active';
+    chartData.replay.currentIndex = idx;
+    chartData.replay.status = 'active';
     
     unsubscribeChart(chartData);
     
-    buildReplayUI();
-    renderReplayFrame();
-    document.getElementById("global-replay-btn").textContent = "Exit Replay";
+    buildReplayUI(chartId);
+    renderReplayFrame(chartId);
+    
+    const btn = document.getElementById(`${chartId}-replay-toggle`);
+    if (btn) {
+        btn.textContent = "⏹";
+        btn.title = "Exit Replay";
+        btn.style.background = "rgba(239, 68, 68, 0.2)";
+    }
 }
 
-function buildReplayUI() {
-    let panel = document.getElementById("replay-toolbar");
+function buildReplayUI(chartId) {
+    let panel = document.getElementById(`replay-toolbar-${chartId}`);
     if (!panel) {
         panel = document.createElement("div");
-        panel.id = "replay-toolbar";
+        panel.id = `replay-toolbar-${chartId}`;
+        panel.className = "replay-toolbar-embedded";
         panel.style.cssText = `
-            position: fixed;
-            bottom: 30px;
+            position: absolute;
+            bottom: 20px;
             left: 50%;
-            transform: translateX(-50%);
+            top: auto !important;
+            height: fit-content !important;
+            min-height: unset !important;
+            width: max-content;
+            max-width: 95%;
+            transform: translateX(-50%) scale(0.75);
+            transform-origin: bottom center;
             background: #1e293b;
             border: 1px solid #3b82f6;
-            padding: 10px 16px;
+            padding: 8px 12px;
             border-radius: 8px;
             display: flex;
-            gap: 12px;
+            gap: 8px;
             align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
             z-index: 1000;
             box-shadow: 0 4px 12px rgba(0,0,0,0.5);
             color: white;
             font-family: inherit;
         `;
-        document.body.appendChild(panel);
+        const container = document.getElementById(`${chartId}-container`);
+        if (container) {
+            container.appendChild(panel);
+        } else {
+            document.body.appendChild(panel);
+        }
     }
     
     panel.innerHTML = `
-        <button id="replay-play" class="theme-btn" style="background: #10b981; border: none; padding: 6px 12px;">▶ Play</button>
-        <button id="replay-pause" class="theme-btn" style="background: #f59e0b; border: none; padding: 6px 12px; display: none;">⏸ Pause</button>
-        <button id="replay-step-back" class="theme-btn" title="Step Back">⏮</button>
-        <button id="replay-step-fwd" class="theme-btn" title="Step Forward">⏭</button>
-        <button id="replay-jump-back" class="theme-btn" title="Jump Back 10">-10</button>
-        <button id="replay-jump-fwd" class="theme-btn" title="Jump Forward 10">+10</button>
-        <select id="replay-speed" class="theme-btn" title="Replay Speed">
+        <button id="${chartId}-replay-play" class="theme-btn" style="background: #10b981; border: none; padding: 6px 10px;">▶ Play</button>
+        <button id="${chartId}-replay-pause" class="theme-btn" style="background: #f59e0b; border: none; padding: 6px 10px; display: none;">⏸ Pause</button>
+        <button id="${chartId}-replay-step-back" class="theme-btn" title="Step Back">⏮</button>
+        <button id="${chartId}-replay-step-fwd" class="theme-btn" title="Step Forward">⏭</button>
+        <button id="${chartId}-replay-jump-back" class="theme-btn" title="Jump Back 10">-10</button>
+        <button id="${chartId}-replay-jump-fwd" class="theme-btn" title="Jump Forward 10">+10</button>
+        <select id="${chartId}-replay-speed" class="theme-btn" title="Replay Speed" style="padding: 4px;">
             <option value="0.25">0.25x</option>
             <option value="0.5">0.5x</option>
             <option value="1" selected>1x</option>
@@ -5473,103 +6633,116 @@ function buildReplayUI() {
             <option value="25">25x</option>
             <option value="50">50x</option>
         </select>
-        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 4px;"></div>
-        <button id="replay-buy" class="theme-btn" style="background: #10b981; border: none;">Buy / Long</button>
-        <button id="replay-sell" class="theme-btn" style="background: #ef4444; border: none;">Sell / Short</button>
-        <button id="replay-close" class="theme-btn" style="background: #394654; border: none;">Close Pos</button>
-        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 4px;"></div>
-        <div style="display: flex; flex-direction: column; font-size: 11px;">
-            <span style="color:#8b9bb0">OHM: <span id="replay-bal" style="color:white;font-weight:bold;">100,000</span></span>
-            <span style="color:#8b9bb0">PnL: <span id="replay-pnl" style="font-weight:bold;">0.00</span></span>
+        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 2px;"></div>
+        <button id="${chartId}-replay-buy" class="theme-btn" style="background: #10b981; border: none; padding: 6px 10px;">Buy</button>
+        <button id="${chartId}-replay-sell" class="theme-btn" style="background: #ef4444; border: none; padding: 6px 10px;">Sell</button>
+        <button id="${chartId}-replay-close" class="theme-btn" style="background: #394654; border: none; padding: 6px 10px;">Close</button>
+        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 2px;"></div>
+        <div style="display: flex; flex-direction: column; font-size: 11px; line-height: 1.2;">
+            <span style="color:#8b9bb0">OHM: <span id="${chartId}-replay-bal" style="color:white;font-weight:bold;">100,000</span></span>
+            <span style="color:#8b9bb0">PnL: <span id="${chartId}-replay-pnl" style="font-weight:bold;">0.00</span></span>
         </div>
-        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 4px;"></div>
-        <button id="replay-stats-toggle" class="theme-btn" style="background: #3b82f6; border: none;">📊 Stats</button>
-        <button id="replay-exit" class="theme-btn" style="background: #ef4444; border: none;">Exit</button>
+        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 2px;"></div>
+        <button id="${chartId}-replay-stats-toggle" class="theme-btn" style="background: #3b82f6; border: none; padding: 6px 10px;">📊 Stats</button>
+        <button id="${chartId}-replay-exit" class="theme-btn" style="background: #ef4444; border: none; padding: 6px 10px;">Exit</button>
     `;
     
-    document.getElementById("replay-play").onclick = () => {
-        state.replay.isPlaying = true;
-        document.getElementById("replay-play").style.display = "none";
-        document.getElementById("replay-pause").style.display = "inline-block";
-        runReplayLoop();
+    document.getElementById(`${chartId}-replay-play`).onclick = () => {
+        const chartData = state.charts[chartId];
+        if (chartData && chartData.replay) {
+            chartData.replay.isPlaying = true;
+            document.getElementById(`${chartId}-replay-play`).style.display = "none";
+            document.getElementById(`${chartId}-replay-pause`).style.display = "inline-block";
+            runReplayLoop(chartId);
+        }
     };
     
-    document.getElementById("replay-pause").onclick = () => {
-        state.replay.isPlaying = false;
-        document.getElementById("replay-play").style.display = "inline-block";
-        document.getElementById("replay-pause").style.display = "none";
-        if (state.replay.timer) clearTimeout(state.replay.timer);
+    document.getElementById(`${chartId}-replay-pause`).onclick = () => {
+        const chartData = state.charts[chartId];
+        if (chartData && chartData.replay) {
+            chartData.replay.isPlaying = false;
+            document.getElementById(`${chartId}-replay-play`).style.display = "inline-block";
+            document.getElementById(`${chartId}-replay-pause`).style.display = "none";
+            if (chartData.replay.timer) clearTimeout(chartData.replay.timer);
+        }
     };
     
-    document.getElementById("replay-step-back").onclick = () => { stepReplay(-1); };
-    document.getElementById("replay-step-fwd").onclick = () => { stepReplay(1); };
-    document.getElementById("replay-jump-back").onclick = () => { stepReplay(-10); };
-    document.getElementById("replay-jump-fwd").onclick = () => { stepReplay(10); };
+    document.getElementById(`${chartId}-replay-step-back`).onclick = () => { stepReplay(chartId, -1); };
+    document.getElementById(`${chartId}-replay-step-fwd`).onclick = () => { stepReplay(chartId, 1); };
+    document.getElementById(`${chartId}-replay-jump-back`).onclick = () => { stepReplay(chartId, -10); };
+    document.getElementById(`${chartId}-replay-jump-fwd`).onclick = () => { stepReplay(chartId, 10); };
     
-    document.getElementById("replay-speed").onchange = (e) => {
-        state.replay.speed = parseFloat(e.target.value);
+    document.getElementById(`${chartId}-replay-speed`).onchange = (e) => {
+        const chartData = state.charts[chartId];
+        if (chartData && chartData.replay) {
+            chartData.replay.speed = parseFloat(e.target.value);
+        }
     };
     
-    document.getElementById("replay-buy").onclick = () => { executeReplayTrade('Long'); };
-    document.getElementById("replay-sell").onclick = () => { executeReplayTrade('Short'); };
-    document.getElementById("replay-close").onclick = () => { closeAllReplayTrades(); };
+    document.getElementById(`${chartId}-replay-buy`).onclick = () => { executeReplayTrade(chartId, 'Long'); };
+    document.getElementById(`${chartId}-replay-sell`).onclick = () => { executeReplayTrade(chartId, 'Short'); };
+    document.getElementById(`${chartId}-replay-close`).onclick = () => { closeAllReplayTrades(chartId); };
     
-    document.getElementById("replay-stats-toggle").onclick = () => {
-        const p = document.getElementById("replay-analytics-panel");
+    document.getElementById(`${chartId}-replay-stats-toggle`).onclick = () => {
+        const p = document.getElementById(`replay-analytics-panel-${chartId}`);
         if (p) p.style.display = p.style.display === "none" ? "block" : "none";
     };
     
-    document.getElementById("replay-exit").onclick = exitReplayMode;
+    document.getElementById(`${chartId}-replay-exit`).onclick = () => exitReplayMode(chartId);
     
-    updateReplayAnalyticsPanel();
+    updateReplayAnalyticsPanel(chartId);
 }
 
-function runReplayLoop() {
-    if (!state.replay || !state.replay.isPlaying) return;
+function runReplayLoop(chartId) {
+    const chartData = state.charts[chartId];
+    if (!chartData || !chartData.replay || !chartData.replay.isPlaying) return;
     
-    if (state.replay.currentIndex >= state.replay.fullData.length - 1) {
-        document.getElementById("replay-pause").click();
+    if (chartData.replay.currentIndex >= chartData.replay.fullData.length - 1) {
+        document.getElementById(`${chartId}-replay-pause`).click();
         alert("End of historical data reached.");
         return;
     }
     
-    stepReplay(1);
+    stepReplay(chartId, 1);
     
-    const interval = 1000 / state.replay.speed;
-    state.replay.timer = setTimeout(runReplayLoop, interval);
+    const interval = 1000 / chartData.replay.speed;
+    chartData.replay.timer = setTimeout(() => runReplayLoop(chartId), interval);
 }
 
-function stepReplay(steps) {
-    if (!state.replay) return;
-    let newIndex = state.replay.currentIndex + steps;
+function stepReplay(chartId, steps) {
+    const chartData = state.charts[chartId];
+    if (!chartData || !chartData.replay) return;
+    
+    let newIndex = chartData.replay.currentIndex + steps;
     if (newIndex < 0) newIndex = 0;
-    if (newIndex >= state.replay.fullData.length) newIndex = state.replay.fullData.length - 1;
+    if (newIndex >= chartData.replay.fullData.length) newIndex = chartData.replay.fullData.length - 1;
     
-    state.replay.currentIndex = newIndex;
-    renderReplayFrame();
+    chartData.replay.currentIndex = newIndex;
+    renderReplayFrame(chartId);
 }
 
-function renderReplayFrame() {
-    const chartData = state.charts[state.replay.chartId];
-    if (!chartData) return;
+function renderReplayFrame(chartId) {
+    const chartData = state.charts[chartId];
+    if (!chartData || !chartData.replay) return;
     
-    const visibleData = state.replay.fullData.slice(0, state.replay.currentIndex + 1);
+    const visibleData = chartData.replay.fullData.slice(0, chartData.replay.currentIndex + 1);
     
     chartData.cachedData = visibleData;
     chartData.currentCandle = visibleData[visibleData.length - 1];
     
     syncChartWithCache(chartData);
-    updateReplayMarkers();
-    updateReplayStatsUI();
+    updateReplayMarkers(chartId);
+    updateReplayStatsUI(chartId);
 }
 
-function executeReplayTrade(direction) {
-    if (!state.replay) return;
-    const currentCandle = state.replay.fullData[state.replay.currentIndex];
+function executeReplayTrade(chartId, direction) {
+    const chartData = state.charts[chartId];
+    if (!chartData || !chartData.replay) return;
+    const currentCandle = chartData.replay.fullData[chartData.replay.currentIndex];
     if (!currentCandle) return;
     
     const price = currentCandle.close;
-    const size = (state.replay.paper.balance * 0.1) / price; 
+    const size = (chartData.replay.paper.balance * 0.1) / price; 
     
     const pos = {
         id: Date.now().toString(),
@@ -5579,31 +6752,31 @@ function executeReplayTrade(direction) {
         entryTime: currentCandle.time
     };
     
-    state.replay.paper.positions.push(pos);
-    updateReplayMarkers();
-    updateReplayStatsUI();
+    chartData.replay.paper.positions.push(pos);
+    updateReplayMarkers(chartId);
+    updateReplayStatsUI(chartId);
 }
 
-function closeAllReplayTrades() {
-    if (!state.replay || state.replay.paper.positions.length === 0) return;
+function closeAllReplayTrades(chartId) {
+    const chartData = state.charts[chartId];
+    if (!chartData || !chartData.replay || chartData.replay.paper.positions.length === 0) return;
     
-    const currentCandle = state.replay.fullData[state.replay.currentIndex];
+    const currentCandle = chartData.replay.fullData[chartData.replay.currentIndex];
     const price = currentCandle.close;
     
-    state.replay.paper.positions.forEach(pos => {
+    chartData.replay.paper.positions.forEach(pos => {
         const isLong = pos.direction === 'Long';
         const pnl = isLong ? (price - pos.entryPrice) * pos.size : (pos.entryPrice - price) * pos.size;
         
-        state.replay.paper.balance += pnl;
+        chartData.replay.paper.balance += pnl;
         
         pos.exitPrice = price;
         pos.exitTime = currentCandle.time;
         pos.pnl = pnl;
         
-        state.replay.paper.history.push(pos);
+        chartData.replay.paper.history.push(pos);
         
-        const chartData = state.charts[state.replay.chartId];
-        if (chartData && chartData.chart) {
+        if (chartData.chart) {
             const lineSeries = chartData.chart.addLineSeries({
                 color: pnl >= 0 ? '#10b981' : '#ef4444',
                 lineWidth: 2,
@@ -5621,14 +6794,14 @@ function closeAllReplayTrades() {
         }
     });
     
-    state.replay.paper.positions = [];
-    updateReplayMarkers();
-    updateReplayStatsUI();
+    chartData.replay.paper.positions = [];
+    updateReplayMarkers(chartId);
+    updateReplayStatsUI(chartId);
 }
 
-function updateReplayMarkers() {
-    const chartData = state.charts[state.replay.chartId];
-    if (!chartData || !chartData.candleSeries) return;
+function updateReplayMarkers(chartId) {
+    const chartData = state.charts[chartId];
+    if (!chartData || !chartData.candleSeries || !chartData.replay) return;
     
     const markers = [];
     
@@ -5642,7 +6815,7 @@ function updateReplayMarkers() {
         }
     });
     
-    state.replay.paper.positions.forEach(pos => {
+    chartData.replay.paper.positions.forEach(pos => {
         markers.push({
             time: pos.entryTime,
             position: pos.direction === 'Long' ? 'belowBar' : 'aboveBar',
@@ -5652,7 +6825,7 @@ function updateReplayMarkers() {
         });
     });
     
-    state.replay.paper.history.forEach(pos => {
+    chartData.replay.paper.history.forEach(pos => {
         markers.push({
             time: pos.entryTime,
             position: pos.direction === 'Long' ? 'belowBar' : 'aboveBar',
@@ -5671,7 +6844,7 @@ function updateReplayMarkers() {
     
     markers.sort((a, b) => a.time - b.time);
     
-    const currentCandle = state.replay.fullData[state.replay.currentIndex];
+    const currentCandle = chartData.replay.fullData[chartData.replay.currentIndex];
     if (currentCandle) {
         const filteredMarkers = markers.filter(m => m.time <= currentCandle.time);
         chartData.candleSeries.setMarkers(filteredMarkers);
@@ -5680,41 +6853,51 @@ function updateReplayMarkers() {
     }
 }
 
-function updateReplayStatsUI() {
-    if (!state.replay) return;
+function updateReplayStatsUI(chartId) {
+    const chartData = state.charts[chartId];
+    if (!chartData || !chartData.replay) return;
     
     let openPnl = 0;
-    const currentCandle = state.replay.fullData[state.replay.currentIndex];
+    const currentCandle = chartData.replay.fullData[chartData.replay.currentIndex];
     if (currentCandle) {
         const price = currentCandle.close;
-        state.replay.paper.positions.forEach(pos => {
+        chartData.replay.paper.positions.forEach(pos => {
             const pnl = pos.direction === 'Long' ? (price - pos.entryPrice) * pos.size : (pos.entryPrice - price) * pos.size;
             openPnl += pnl;
         });
     }
     
-    const balEl = document.getElementById("replay-bal");
-    const pnlEl = document.getElementById("replay-pnl");
+    const balEl = document.getElementById(`${chartId}-replay-bal`);
+    const pnlEl = document.getElementById(`${chartId}-replay-pnl`);
     
     if (balEl && pnlEl) {
-        balEl.textContent = `${state.replay.paper.balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        balEl.textContent = `${chartData.replay.paper.balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
         pnlEl.textContent = `${openPnl >= 0 ? '+' : ''}${openPnl.toFixed(2)}`;
         pnlEl.style.color = openPnl >= 0 ? '#10b981' : '#ef4444';
     }
     
-    updateReplayAnalyticsPanel(openPnl);
+    updateReplayAnalyticsPanel(chartId, openPnl);
 }
 
-function updateReplayAnalyticsPanel(openPnl = 0) {
-    let panel = document.getElementById("replay-analytics-panel");
+function updateReplayAnalyticsPanel(chartId, openPnl = 0) {
+    const chartData = state.charts[chartId];
+    if (!chartData || !chartData.replay) return;
+    
+    let panel = document.getElementById(`replay-analytics-panel-${chartId}`);
     if (!panel) {
         panel = document.createElement("div");
-        panel.id = "replay-analytics-panel";
+        panel.id = `replay-analytics-panel-${chartId}`;
+        panel.className = "replay-analytics-panel-embedded";
         panel.style.cssText = `
-            position: fixed;
-            top: 60px;
+            position: absolute;
+            top: 20px;
             right: 20px;
+            bottom: auto !important;
+            height: fit-content !important;
+            min-height: unset !important;
             width: 250px;
+            transform: scale(0.8);
+            transform-origin: top right;
             background: #1e293b;
             border: 1px solid #3b82f6;
             border-radius: 8px;
@@ -5725,10 +6908,15 @@ function updateReplayAnalyticsPanel(openPnl = 0) {
             display: none;
             box-shadow: 0 4px 12px rgba(0,0,0,0.5);
         `;
-        document.body.appendChild(panel);
+        const container = document.getElementById(`${chartId}-container`);
+        if (container) {
+            container.appendChild(panel);
+        } else {
+            document.body.appendChild(panel);
+        }
     }
     
-    const history = state.replay.paper.history;
+    const history = chartData.replay.paper.history;
     const wins = history.filter(t => t.pnl > 0);
     const losses = history.filter(t => t.pnl <= 0);
     
@@ -5746,12 +6934,12 @@ function updateReplayAnalyticsPanel(openPnl = 0) {
     const avgLoss = losses.length > 0 ? (grossLoss / losses.length) : 0;
     const profitFactor = grossLoss > 0 ? (grossWin / grossLoss).toFixed(2) : (grossWin > 0 ? '∞' : '0.00');
     
-    const netPnl = (state.replay.paper.balance - state.replay.paper.initialBalance) + openPnl;
-    const currentEquity = state.replay.paper.balance + openPnl;
+    const netPnl = (chartData.replay.paper.balance - chartData.replay.paper.initialBalance) + openPnl;
+    const currentEquity = chartData.replay.paper.balance + openPnl;
     
     panel.innerHTML = `
         <h3 style="margin-top:0; color:#3b82f6; font-size:14px; border-bottom: 1px solid #394654; padding-bottom:8px;">Replay Statistics</h3>
-        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Starting Balance:</span> <span>${state.replay.paper.initialBalance.toFixed(2)} OHM</span></div>
+        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Starting Balance:</span> <span>${chartData.replay.paper.initialBalance.toFixed(2)} OHM</span></div>
         <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Current Equity:</span> <span>${currentEquity.toFixed(2)} OHM</span></div>
         <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Net PnL:</span> <span style="color:${netPnl>=0?'#10b981':'#ef4444'}">${netPnl>=0?'+':''}${netPnl.toFixed(2)} OHM</span></div>
         <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Win Rate:</span> <span>${winRate}%</span></div>
@@ -5764,49 +6952,47 @@ function updateReplayAnalyticsPanel(openPnl = 0) {
     `;
 }
 
-function exitReplayMode() {
-    if (!state.replay) return;
+function exitReplayMode(chartId) {
+    const chartData = state.charts[chartId];
+    if (!chartData || !chartData.replay) return;
     
-    if (state.replay.timer) clearTimeout(state.replay.timer);
+    if (chartData.replay.timer) clearTimeout(chartData.replay.timer);
     
-    let chartToUpdate = null;
-
-    if (state.replay.status === 'selecting') {
-        const chartData = state.charts[state.replay.chartId];
-        if (chartData) {
-            const container = document.getElementById(`${chartData.id}-container`);
-            container.style.cursor = "default";
-            clearPaneMessage(chartData.id);
-        }
-    } else if (state.replay.status === 'active') {
-        const chartData = state.charts[state.replay.chartId];
-        if (chartData) {
-            chartData.cachedData = state.replay.fullData;
-            syncChartWithCache(chartData);
-            subscribeChart(chartData);
-            
-            if (chartData.replayLines) {
-                chartData.replayLines.forEach(line => {
-                    try { chartData.chart.removeSeries(line); } catch(e){}
-                });
-            }
+    if (chartData.replay.status === 'selecting') {
+        const container = document.getElementById(`${chartId}-container`);
+        if (container) container.style.cursor = "default";
+        clearPaneMessage(chartId);
+    } else if (chartData.replay.status === 'active') {
+        chartData.cachedData = chartData.replay.fullData;
+        syncChartWithCache(chartData);
+        subscribeChart(chartData);
+        
+        if (chartData.replayLines) {
+            chartData.replayLines.forEach(line => {
+                try { chartData.chart.removeSeries(line); } catch(e){}
+            });
             chartData.replayLines = [];
-            chartToUpdate = chartData;
         }
     }
     
-    const panel = document.getElementById("replay-toolbar");
+    delete chartData.replay;
+    
+    const panel = document.getElementById(`replay-toolbar-${chartId}`);
     if (panel) panel.remove();
     
-    const statsPanel = document.getElementById("replay-analytics-panel");
-    if (statsPanel) statsPanel.remove();
+    const analyticsPanel = document.getElementById(`replay-analytics-panel-${chartId}`);
+    if (analyticsPanel) analyticsPanel.remove();
     
-    state.replay = null;
-    document.getElementById("global-replay-btn").textContent = "⏪ Replay";
-
-    if (chartToUpdate) {
-        updateMarkers(chartToUpdate);
-        chartToUpdate.chart.timeScale().scrollToRealTime();
+    const btn = document.getElementById(`${chartId}-replay-toggle`);
+    if (btn) {
+        btn.textContent = "⏪";
+        btn.title = "Market Replay";
+        btn.style.background = "";
+    }
+    
+    if (chartData && chartData.chart) {
+        updateMarkers(chartData);
+        chartData.chart.timeScale().scrollToRealTime();
     }
 }
 
@@ -6076,5 +7262,409 @@ function renderBacktestResults(chartData, results) {
         const from = results.trades[0].time;
         const to = results.trades[results.trades.length - 1].exitTime;
         chartData.chart.timeScale().setVisibleRange({ from, to });
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  VOLUME PROFILE (VPVR)  —  Canvas overlay, TradingView style
+// ═══════════════════════════════════════════════════════════════════════════
+
+const VP_BUCKETS    = 100;   // number of price rows
+const VP_WIDTH_PCT  = 0.12;  // fraction of chart width used by bars
+const VP_OPACITY    = 0.82;  // overall overlay opacity
+const VP_BUY_COLOR  = 'rgba(16, 185, 129, 0.55)';   // green bars
+const VP_SELL_COLOR = 'rgba(220, 38, 38, 0.55)';    // red bars
+const VP_POC_COLOR  = '#facc15';                     // yellow POC line
+
+function _ensureVPCanvas(chartData) {
+    const container = document.getElementById(`${chartData.id}-container`);
+    if (!container) return null;
+    let canvas = container.querySelector('.vp-canvas');
+    if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvas.className = 'vp-canvas';
+        canvas.style.cssText = `
+            position:absolute; top:0; left:0; width:100%; height:100%;
+            pointer-events:none; z-index:30;
+        `;
+        container.appendChild(canvas);
+    }
+    return canvas;
+}
+
+function clearVolumeProfile(chartData) {
+    const container = document.getElementById(`${chartData.id}-container`);
+    if (!container) return;
+    const canvas = container.querySelector('.vp-canvas');
+    if (canvas) {
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+}
+
+function drawVolumeProfile(chartData) {
+    if (!chartData.chart || !chartData.candleSeries) return;
+    if (chartData.indicators.vpvr === false || chartData.indicators.vpvrVisible === false) {
+        clearVolumeProfile(chartData);
+        return;
+    }
+    const candles = chartData.cachedData;
+    if (!candles || candles.length === 0) return;
+
+    const canvas = _ensureVPCanvas(chartData);
+    if (!canvas) return;
+
+    const container = document.getElementById(`${chartData.id}-container`);
+    const rect = container.getBoundingClientRect();
+    canvas.width  = rect.width  * window.devicePixelRatio;
+    canvas.height = rect.height * window.devicePixelRatio;
+    canvas.style.width  = rect.width  + 'px';
+    canvas.style.height = rect.height + 'px';
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+
+    // Use only visible candles for VPVR (visible range)
+    let visibleCandles = candles;
+    try {
+        const lr = chartData.chart.timeScale().getVisibleLogicalRange();
+        if (lr) {
+            const from = Math.max(0, Math.floor(lr.from));
+            const to   = Math.min(candles.length - 1, Math.ceil(lr.to));
+            if (to > from) visibleCandles = candles.slice(from, to + 1);
+        }
+    } catch(e) {}
+
+    // Price range from visible candles
+    const priceHigh = Math.max(...visibleCandles.map(c => c.high));
+    const priceLow  = Math.min(...visibleCandles.map(c => c.low));
+    if (priceHigh <= priceLow) { ctx.restore(); return; }
+
+    const bucketSize = (priceHigh - priceLow) / VP_BUCKETS;
+
+    // Initialise buckets
+    const buy  = new Float64Array(VP_BUCKETS);
+    const sell = new Float64Array(VP_BUCKETS);
+
+    // Distribute volume uniformly between low and high of each candle
+    for (const c of visibleCandles) {
+        const vol  = c.volume || 0;
+        if (vol <= 0) continue;
+        const isBuy = c.close >= c.open;
+        const lo = Math.min(c.low,  priceHigh); // clamp
+        const hi = Math.min(c.high, priceHigh);
+        const bStart = Math.max(0, Math.floor((lo - priceLow) / bucketSize));
+        const bEnd   = Math.min(VP_BUCKETS - 1, Math.floor((hi - priceLow) / bucketSize));
+        const spread = Math.max(1, bEnd - bStart + 1);
+        const perBucket = vol / spread;
+        for (let b = bStart; b <= bEnd; b++) {
+            if (isBuy)  buy[b]  += perBucket;
+            else        sell[b] += perBucket;
+        }
+    }
+
+    // Totals & max for scaling
+    const total = new Float64Array(VP_BUCKETS);
+    let maxVol = 0, pocIdx = 0;
+    for (let b = 0; b < VP_BUCKETS; b++) {
+        total[b] = buy[b] + sell[b];
+        if (total[b] > maxVol) { maxVol = total[b]; pocIdx = b; }
+    }
+    if (maxVol === 0) { ctx.restore(); return; }
+
+    // Chart geometry — right-aligned, inside price scale area
+    let rightScaleW = 50;
+    try {
+        const w = chartData.chart.priceScale('right').width();
+        if (w > 10 && w < 200) rightScaleW = w;
+    } catch(e) {}
+    const maxBarW = rect.width * VP_WIDTH_PCT;
+    const barRight = rect.width - rightScaleW; // bars end at left edge of price scale
+
+    ctx.globalAlpha = VP_OPACITY;
+
+    for (let b = 0; b < VP_BUCKETS; b++) {
+        if (total[b] === 0) continue;
+
+        const bucketPrice = priceLow + b * bucketSize;
+        const bucketPriceTop = bucketPrice + bucketSize;
+
+        const yBot = chartData.candleSeries.priceToCoordinate(bucketPrice);
+        const yTop = chartData.candleSeries.priceToCoordinate(bucketPriceTop);
+        if (yBot === null || yTop === null) continue;
+
+        const barH = Math.max(1, Math.abs(yBot - yTop) - 0.5);
+        const yDraw = Math.min(yBot, yTop);
+
+        const totalW = (total[b] / maxVol) * maxBarW;
+        const buyW   = (buy[b]  / maxVol) * maxBarW;
+
+        // Sell (red) portion
+        if (sell[b] > 0) {
+            ctx.fillStyle = VP_SELL_COLOR;
+            ctx.fillRect(barRight - totalW, yDraw, totalW - buyW, barH);
+        }
+        // Buy (green) portion on top
+        if (buy[b] > 0) {
+            ctx.fillStyle = VP_BUY_COLOR;
+            ctx.fillRect(barRight - buyW, yDraw, buyW, barH);
+        }
+    }
+
+    // POC line — horizontal yellow dash across the full bar
+    const pocPrice = priceLow + pocIdx * bucketSize + bucketSize / 2;
+    chartData.vpvrPocPrice = pocPrice;
+    const pocY = chartData.candleSeries.priceToCoordinate(pocPrice);
+    if (pocY !== null) {
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = VP_POC_COLOR;
+        ctx.lineWidth = 1.5;
+        ctx.setLineDash([4, 3]);
+        ctx.beginPath();
+        ctx.moveTo(barRight - maxBarW, pocY);
+        ctx.lineTo(barRight, pocY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        // POC label
+        ctx.font = 'bold 9px Inter, sans-serif';
+        ctx.fillStyle = VP_POC_COLOR;
+        ctx.textAlign = 'right';
+        ctx.textBaseline = 'middle';
+        ctx.fillText('POC', barRight - maxBarW - 2, pocY);
+    }
+
+    ctx.restore();
+
+    // Re-subscribe to time/price scale changes to keep VP in sync with panning/zooming
+    if (!chartData._vpSubscribed) {
+        chartData._vpSubscribed = true;
+        chartData.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+            if (chartData.indicators.vpvr) drawVolumeProfile(chartData);
+        });
+        // Watch container resize
+        if (!chartData._vpResizeObs) {
+            chartData._vpResizeObs = new ResizeObserver(() => {
+                if (chartData.indicators.vpvr) drawVolumeProfile(chartData);
+            });
+            chartData._vpResizeObs.observe(container);
+        }
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  SESSION HIGHLIGHTING  —  Canvas overlay, TradingView style
+//  Asia: 00:00–09:00 UTC  |  London: 07:00–16:00 UTC  |  NY: 13:00–22:00 UTC
+// ═══════════════════════════════════════════════════════════════════════════
+
+const SESSIONS = [
+    { name: 'Asia',   startH:  0, endH:  9, color: 'rgba(167, 139, 250, 0.06)' },  // soft violet
+    { name: 'London', startH:  7, endH: 16, color: 'rgba(56,  189, 248, 0.06)' },  // soft sky
+    { name: 'NY',     startH: 13, endH: 22, color: 'rgba(34,  197, 94, 0.06)'  },  // soft green
+];
+
+// Intervals where sessions make sense (15m and above)
+const SESSION_MIN_INTERVALS = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d'];
+
+function _ensureSessionCanvas(chartData) {
+    const container = document.getElementById(`${chartData.id}-container`);
+    if (!container) return null;
+    let canvas = container.querySelector('.session-canvas');
+    if (!canvas) {
+        canvas = document.createElement('canvas');
+        canvas.className = 'session-canvas';
+        canvas.style.cssText = `
+            position:absolute; top:0; left:0; width:100%; height:100%;
+            pointer-events:none; z-index:5;
+        `;
+        container.appendChild(canvas);
+    }
+    return canvas;
+}
+
+function clearSessionBands(chartData) {
+    const container = document.getElementById(`${chartData.id}-container`);
+    if (!container) return;
+    const canvas = container.querySelector('.session-canvas');
+    if (canvas) {
+        const ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+    }
+}
+
+function drawSessionBands(chartData) {
+    if (!chartData.chart || !chartData.cachedData || chartData.cachedData.length === 0) return;
+    if (chartData.indicators.sessions === false || chartData.indicators.sessionsVisible === false) {
+        clearSessionBands(chartData);
+        return;
+    }
+
+    // Only draw for appropriate timeframes
+    if (!SESSION_MIN_INTERVALS.includes(chartData.interval)) {
+        clearSessionBands(chartData);
+        return;
+    }
+
+    const canvas = _ensureSessionCanvas(chartData);
+    if (!canvas) return;
+
+    const container = document.getElementById(`${chartData.id}-container`);
+    const rect = container.getBoundingClientRect();
+    canvas.width  = rect.width  * window.devicePixelRatio;
+    canvas.height = rect.height * window.devicePixelRatio;
+    canvas.style.width  = rect.width  + 'px';
+    canvas.style.height = rect.height + 'px';
+
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+
+    const timeScale = chartData.chart.timeScale();
+    const candles   = chartData.cachedData;
+
+    // Get visible logical range
+    let from = 0, to = candles.length - 1;
+    try {
+        const lr = timeScale.getVisibleLogicalRange();
+        if (lr) {
+            from = Math.max(0, Math.floor(lr.from));
+            to   = Math.min(candles.length - 1, Math.ceil(lr.to));
+        }
+    } catch(e) {}
+
+    // Build a set of unique calendar dates visible on screen
+    const seenDates = new Set();
+    for (let i = from; i <= to; i++) {
+        const c = candles[i];
+        if (!c) continue;
+        const tMs = typeof c.time === 'object'
+            ? Date.UTC(c.time.year, c.time.month - 1, c.time.day)
+            : c.time * 1000;
+        const d = new Date(tMs);
+        const key = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
+        seenDates.add(key);
+    }
+
+    // For each visible date, draw session bands + boundary markers
+    const nowSec = Date.now() / 1000;
+    // Extrapolate the x-pixel for "now" — timeToCoordinate(now) returns null
+    // in the rightOffset gap, so we calculate it from the candle bar spacing.
+    let chartRight = rect.width - 60; // safe fallback
+    if (candles.length >= 2) {
+        const cA = candles[candles.length - 2];
+        const cB = candles[candles.length - 1];
+        const tA = typeof cA.time === 'object'
+            ? Date.UTC(cA.time.year, cA.time.month - 1, cA.time.day) / 1000 : cA.time;
+        const tB = typeof cB.time === 'object'
+            ? Date.UTC(cB.time.year, cB.time.month - 1, cB.time.day) / 1000 : cB.time;
+        const xA = timeScale.timeToCoordinate(tA);
+        const xB = timeScale.timeToCoordinate(tB);
+        if (xA !== null && xB !== null && tB > tA) {
+            const pxPerSec = (xB - xA) / (tB - tA);
+            chartRight = xB + (nowSec - tB) * pxPerSec;
+        }
+    }
+
+    for (const dateKey of seenDates) {
+        const [y, m, d] = dateKey.split('-').map(Number);
+
+        for (const session of SESSIONS) {
+            const startUtc = Date.UTC(y, m, d, session.startH, 0, 0) / 1000;
+            const endUtc   = Date.UTC(y, m, d, session.endH,   0, 0) / 1000;
+
+            // Skip sessions entirely in the past or future (outside chart window)
+            if (endUtc < (candles[from] ? (typeof candles[from].time === 'object'
+                ? Date.UTC(candles[from].time.year, candles[from].time.month - 1, candles[from].time.day) / 1000
+                : candles[from].time) : 0)) continue;
+
+            const x1Raw = timeScale.timeToCoordinate(startUtc);
+            const x2Raw = timeScale.timeToCoordinate(endUtc);
+
+            // If the session is entirely off-screen (both null) skip it —
+            // UNLESS it is currently active (spans the right edge into the future)
+            const isActive = startUtc <= nowSec && endUtc >= nowSec;
+            if (x1Raw === null && x2Raw === null && !isActive) continue;
+
+            // Clamp off-screen edges:
+            //  • start off left  → clamp to 0
+            //  • end off right (future) → clamp to chart right edge
+            const left  = x1Raw !== null ? x1Raw : 0;
+            const right = x2Raw !== null ? x2Raw : chartRight;
+            const width = right - left;
+            if (width < 1) continue;
+
+            // ── Background shading ────────────────────────────────────────
+            ctx.fillStyle = session.color;
+            ctx.fillRect(left, 0, width, rect.height);
+
+            // ── Vertical dashed boundary line at session OPEN ─────────────
+            // (only draw if the open is actually visible on screen)
+            if (x1Raw !== null) {
+                const lineColor = session.color.replace('0.06', '0.5');
+                ctx.save();
+                ctx.strokeStyle = lineColor;
+                ctx.lineWidth = 1;
+                ctx.setLineDash([3, 4]);
+                ctx.beginPath();
+                ctx.moveTo(left, 0);
+                ctx.lineTo(left, rect.height);
+                ctx.stroke();
+                ctx.setLineDash([]);
+                ctx.restore();
+            }
+
+            // ── Pill label just above the time axis (bottom of chart) ─────
+            if (width > 28) {
+                const pillH   = 14;
+                const pillY   = rect.height - pillH - 2;
+                const pillPad = 5;
+                const label   = isActive ? `${session.name} ●` : session.name;
+
+                ctx.font = `bold 8px Inter, sans-serif`;
+                ctx.textAlign = 'left';
+                ctx.textBaseline = 'middle';
+                const textW = ctx.measureText(label).width;
+                const pillW = textW + pillPad * 2;
+
+                // Anchor pill at start of session (clamp to avoid overflow)
+                const pillX = Math.max(2, Math.min(left + 2, rect.width - pillW - 4));
+
+                // Pill background
+                const bgColor = session.color.replace('0.06', isActive ? '0.32' : '0.22');
+                ctx.fillStyle = bgColor;
+                ctx.beginPath();
+                ctx.roundRect(pillX, pillY, pillW, pillH, 3);
+                ctx.fill();
+
+                // Pill border (brighter for active session)
+                ctx.strokeStyle = session.color.replace('0.06', isActive ? '0.85' : '0.55');
+                ctx.lineWidth = isActive ? 1.2 : 0.8;
+                ctx.stroke();
+
+                // Pill text
+                ctx.fillStyle = session.color.replace('0.06', '0.95');
+                ctx.fillText(label, pillX + pillPad, pillY + pillH / 2);
+            }
+        }
+    }
+
+    ctx.restore();
+
+    // Subscribe to time scale changes once
+    if (!chartData._sessSubscribed) {
+        chartData._sessSubscribed = true;
+        chartData.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+            if (chartData.indicators.sessions) drawSessionBands(chartData);
+        });
+        if (!chartData._sessResizeObs) {
+            chartData._sessResizeObs = new ResizeObserver(() => {
+                if (chartData.indicators.sessions) drawSessionBands(chartData);
+            });
+            chartData._sessResizeObs.observe(container);
+        }
     }
 }

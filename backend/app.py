@@ -8,7 +8,7 @@ import queue
 from datetime import datetime
 from threading import Lock
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory, stream_with_context
 from flask_cors import CORS
 
 from data_source import (
@@ -42,7 +42,11 @@ hyperliquid_symbols: set[str] = set()
 @app.route("/frontend/")
 @app.route("/frontend/index.html")
 def index():
-    return send_from_directory(FRONTEND_DIR, "index.html")
+    response = send_from_directory(FRONTEND_DIR, "index.html")
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 @app.route("/api/health")
@@ -181,11 +185,19 @@ def live_subscribe():
 
 @app.route("/frontend/<path:filename>")
 def serve_frontend_assets(filename):
-    return send_from_directory(FRONTEND_DIR, filename)
+    response = send_from_directory(FRONTEND_DIR, filename)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 @app.route("/<path:filename>")
 def serve_static(filename):
-    return send_from_directory(FRONTEND_DIR, filename)
+    response = send_from_directory(FRONTEND_DIR, filename)
+    response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+    response.headers["Pragma"] = "no-cache"
+    response.headers["Expires"] = "0"
+    return response
 
 
 def broadcast_live_tick(tick):

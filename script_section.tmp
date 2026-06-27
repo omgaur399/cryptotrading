@@ -1,0 +1,205 @@
+function openSettingsModal(chartData) {
+    let modal = document.getElementById("chart-settings-modal");
+    if (!modal) {
+        modal = document.createElement("div");
+        modal.id = "chart-settings-modal";
+        modal.className = "settings-modal-overlay";
+        document.body.appendChild(modal);
+    }
+
+    modal.innerHTML = `
+        <div class="settings-modal-content">
+            <h3>Chart Settings</h3>
+            <div class="settings-group">
+                <label>SMA Period</label>
+                <input type="number" id="sma-period-input" value="${chartData.indicators.smaPeriod}" min="1">
+            </div>
+            <div class="settings-group">
+                <label>SMA Color</label>
+                <input type="color" id="sma-color-input" value="${chartData.indicators.smaColor}">
+            </div>
+            <div class="settings-group">
+                <label>SMA Thickness</label>
+                <select id="sma-width-input">
+                    <option value="1" ${chartData.indicators.smaLineWidth == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${chartData.indicators.smaLineWidth == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${chartData.indicators.smaLineWidth == 3 ? 'selected' : ''}>Thick</option>
+                </select>
+            </div>
+            <div class="settings-group">
+                <label>EMA Period</label>
+                <input type="number" id="ema-period-input" value="${chartData.indicators.emaPeriod}" min="1">
+            </div>
+            <div class="settings-group">
+                <label>EMA Color</label>
+                <input type="color" id="ema-color-input" value="${chartData.indicators.emaColor}">
+            </div>
+            <div class="settings-group">
+                <label>EMA Thickness</label>
+                <select id="ema-width-input">
+                    <option value="1" ${chartData.indicators.emaLineWidth == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${chartData.indicators.emaLineWidth == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${chartData.indicators.emaLineWidth == 3 ? 'selected' : ''}>Thick</option>
+                </select>
+            </div>
+            <div class="settings-group">
+                <label>BB Period</label>
+                <input type="number" id="bb-period-input" value="${chartData.indicators.bbPeriod}" min="1">
+            </div>
+            <div class="settings-group">
+                <label>BB Std Dev</label>
+                <input type="number" id="bb-stddev-input" value="${chartData.indicators.bbStdDev}" min="0.1" step="0.1">
+            </div>
+            <div class="settings-group">
+                <label>BB Color</label>
+                <input type="color" id="bb-color-input" value="${chartData.indicators.bbColor}">
+            </div>
+            <div class="settings-group">
+                <label>BB Thickness</label>
+                <select id="bb-width-input">
+                    <option value="1" ${chartData.indicators.bbLineWidth == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${chartData.indicators.bbLineWidth == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${chartData.indicators.bbLineWidth == 3 ? 'selected' : ''}>Thick</option>
+                </select>
+            </div>
+            <div class="settings-group">
+                <label>RSI Period</label>
+                <input type="number" id="rsi-period-input" value="${chartData.indicators.rsiPeriod}" min="1">
+            </div>
+            <div class="settings-group">
+                <label>RSI Color</label>
+                <input type="color" id="rsi-color-input" value="${chartData.indicators.rsiColor}">
+            </div>
+            <div class="settings-group">
+                <label>RSI Thickness</label>
+                <select id="rsi-width-input">
+                    <option value="1" ${chartData.indicators.rsiLineWidth == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${chartData.indicators.rsiLineWidth == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${chartData.indicators.rsiLineWidth == 3 ? 'selected' : ''}>Thick</option>
+                </select>
+            </div>
+            <div class="settings-group">
+                <label>VWAP Color</label>
+                <input type="color" id="vwap-color-input" value="${chartData.indicators.vwapColor}">
+            </div>
+            <div class="settings-group">
+                <label>VWAP Thickness</label>
+                <select id="vwap-width-input">
+                    <option value="1" ${chartData.indicators.vwapLineWidth == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${chartData.indicators.vwapLineWidth == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${chartData.indicators.vwapLineWidth == 3 ? 'selected' : ''}>Thick</option>
+                </select>
+            </div>
+            <div class="settings-group">
+                <label>ATR Period</label>
+                <input type="number" id="atr-period-input" value="${chartData.indicators.atrPeriod}" min="1">
+            </div>
+            <div class="settings-group">
+                <label>ATR Color</label>
+                <input type="color" id="atr-color-input" value="${chartData.indicators.atrColor}">
+            </div>
+            <div class="settings-group">
+                <label>ATR Thickness</label>
+                <select id="atr-width-input">
+                    <option value="1" ${chartData.indicators.atrLineWidth == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${chartData.indicators.atrLineWidth == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${chartData.indicators.atrLineWidth == 3 ? 'selected' : ''}>Thick</option>
+                </select>
+            </div>
+            <div class="settings-actions">
+                <button id="settings-cancel-btn">Cancel</button>
+                <button id="settings-save-btn">Save</button>
+            </div>
+        </div>
+    `;
+    
+    modal.style.display = "flex";
+
+    document.getElementById("settings-cancel-btn").onclick = () => {
+        modal.style.display = "none";
+    };
+
+    document.getElementById("settings-save-btn").onclick = () => {
+        const smaPeriod = parseInt(document.getElementById("sma-period-input").value, 10);
+        const emaPeriod = parseInt(document.getElementById("ema-period-input").value, 10);
+        const bbPeriod = parseInt(document.getElementById("bb-period-input").value, 10);
+        const bbStdDev = parseFloat(document.getElementById("bb-stddev-input").value);
+        const rsiPeriod = parseInt(document.getElementById("rsi-period-input").value, 10);
+        const atrPeriod = parseInt(document.getElementById("atr-period-input").value, 10);
+        
+        if (!isNaN(smaPeriod) && smaPeriod > 0) chartData.indicators.smaPeriod = smaPeriod;
+        if (!isNaN(emaPeriod) && emaPeriod > 0) chartData.indicators.emaPeriod = emaPeriod;
+        if (!isNaN(bbPeriod) && bbPeriod > 0) chartData.indicators.bbPeriod = bbPeriod;
+        if (!isNaN(bbStdDev) && bbStdDev > 0) chartData.indicators.bbStdDev = bbStdDev;
+        if (!isNaN(rsiPeriod) && rsiPeriod > 0) chartData.indicators.rsiPeriod = rsiPeriod;
+        if (!isNaN(atrPeriod) && atrPeriod > 0) chartData.indicators.atrPeriod = atrPeriod;
+        
+        chartData.indicators.smaColor = document.getElementById("sma-color-input").value;
+        chartData.indicators.emaColor = document.getElementById("ema-color-input").value;
+        chartData.indicators.bbColor = document.getElementById("bb-color-input").value;
+        chartData.indicators.rsiColor = document.getElementById("rsi-color-input").value;
+        chartData.indicators.vwapColor = document.getElementById("vwap-color-input").value;
+        chartData.indicators.atrColor = document.getElementById("atr-color-input").value;
+        chartData.indicators.smaLineWidth = parseInt(document.getElementById("sma-width-input").value, 10);
+        chartData.indicators.emaLineWidth = parseInt(document.getElementById("ema-width-input").value, 10);
+        chartData.indicators.bbLineWidth = parseInt(document.getElementById("bb-width-input").value, 10);
+        chartData.indicators.rsiLineWidth = parseInt(document.getElementById("rsi-width-input").value, 10);
+        chartData.indicators.vwapLineWidth = parseInt(document.getElementById("vwap-width-input").value, 10);
+        chartData.indicators.atrLineWidth = parseInt(document.getElementById("atr-width-input").value, 10);
+
+        if (chartData.smaSeries) {
+            chartData.smaSeries.applyOptions({ color: chartData.indicators.smaColor, lineWidth: chartData.indicators.smaLineWidth });
+            if (chartData.indicators.sma) chartData.smaSeries.setData(calculateSMA(chartData.cachedData, chartData.indicators.smaPeriod));
+        }
+        if (chartData.emaSeries) {
+            chartData.emaSeries.applyOptions({ color: chartData.indicators.emaColor, lineWidth: chartData.indicators.emaLineWidth });
+            if (chartData.indicators.ema) chartData.emaSeries.setData(calculateEMA(chartData.cachedData, chartData.indicators.emaPeriod));
+        }
+        if (chartData.bbUpperSeries) {
+            const bbOpts = { color: chartData.indicators.bbColor, lineWidth: chartData.indicators.bbLineWidth };
+            chartData.bbUpperSeries.applyOptions(bbOpts);
+            chartData.bbMiddleSeries.applyOptions(bbOpts);
+            chartData.bbLowerSeries.applyOptions(bbOpts);
+            if (chartData.indicators.bb) {
+                const bbData = calculateBB(chartData.cachedData, chartData.indicators.bbPeriod, chartData.indicators.bbStdDev);
+                chartData.bbUpperSeries.setData(bbData.upper);
+                chartData.bbMiddleSeries.setData(bbData.middle);
+                chartData.bbLowerSeries.setData(bbData.lower);
+            }
+        }
+        if (chartData.rsiSeries) {
+            chartData.rsiSeries.applyOptions({ color: chartData.indicators.rsiColor, lineWidth: chartData.indicators.rsiLineWidth });
+            if (chartData.indicators.rsi) {
+                chartData.rsiSeries.setData(calculateRSI(chartData.cachedData, chartData.indicators.rsiPeriod));
+            }
+        }
+        if (chartData.vwapSeries) {
+            chartData.vwapSeries.applyOptions({ color: chartData.indicators.vwapColor, lineWidth: chartData.indicators.vwapLineWidth });
+            if (chartData.indicators.vwap) chartData.vwapSeries.setData(calculateVWAP(chartData.cachedData, chartData.interval));
+        }
+        if (chartData.atrSeries) {
+            chartData.atrSeries.applyOptions({ color: chartData.indicators.atrColor, lineWidth: chartData.indicators.atrLineWidth });
+            if (chartData.indicators.atr) {
+                chartData.atrSeries.setData(calculateATR(chartData.cachedData, chartData.indicators.atrPeriod));
+            }
+        }
+
+        updateSubchartMargins(chartData);
+
+        const select = document.querySelector(`#${chartData.id} .indicator-select`);
+        if (select) {
+            select.options[2].text = `SMA ${chartData.indicators.smaPeriod} (${chartData.indicators.sma ? 'On' : 'Off'})`;
+            select.options[3].text = `EMA ${chartData.indicators.emaPeriod} (${chartData.indicators.ema ? 'On' : 'Off'})`;
+            select.options[4].text = `BB ${chartData.indicators.bbPeriod} (${chartData.indicators.bb ? 'On' : 'Off'})`;
+            select.options[5].text = `RSI ${chartData.indicators.rsiPeriod} (${chartData.indicators.rsi ? 'On' : 'Off'})`;
+            select.options[6].text = `VWAP (${chartData.indicators.vwap ? 'On' : 'Off'})`;
+            select.options[7].text = `ATR ${chartData.indicators.atrPeriod} (${chartData.indicators.atr ? 'On' : 'Off'})`;
+        }
+        saveLayoutState();
+        modal.style.display = "none";
+    };
+}
+
+function injectThemeStyles() {
+    const style = document.createElement('style');
+    style.id = "theme-styles";

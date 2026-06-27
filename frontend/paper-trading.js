@@ -1210,7 +1210,7 @@ window.PaperTrading = class PaperTrading {
         if (cData && cData.chart) {
             cData.customPriceOffset = 0;
             if (cData.candleSeries) {
-                cData.candleSeries.applyOptions({ autoscaleInfoProvider: null });
+                cData.candleSeries.applyOptions({ autoscaleInfoProvider: undefined });
             }
             
             const forceReset = () => {
