@@ -49,6 +49,38 @@
     --active-accent: hsl(215, 90%, 60%);
 }
 
+/* ── Light Theme Token Overrides ──────────────────────── */
+body.light-theme {
+    /* Base surfaces */
+    --bg:       hsl(210, 20%, 98%);
+    --panel:    hsl(0, 0%, 100%);
+    --panel-2:  hsl(210, 17%, 95%);
+    --panel-3:  hsl(210, 16%, 92%);
+
+    /* Borders */
+    --border:       hsl(214, 32%, 85%);
+    --border-light: hsl(214, 32%, 78%);
+
+    /* Text */
+    --text:   hsl(220, 30%, 10%);
+    --muted:  hsl(215, 16%, 40%);
+    --subtle: hsl(215, 12%, 60%);
+
+    /* Glass */
+    --glass-bg:     hsla(0, 0%, 100%, 0.88);
+    --glass-border: hsla(214, 32%, 72%, 0.4);
+    --glass-shadow: 0 8px 32px hsla(0, 0%, 0%, 0.10), 0 1px 0 hsla(255,255%,255%,0.8) inset;
+
+    /* Elevation shadows — lighter for light mode */
+    --shadow-sm: 0 1px 3px hsla(0,0%,0%,0.1), 0 1px 2px hsla(0,0%,0%,0.06);
+    --shadow-md: 0 4px 16px hsla(0,0%,0%,0.10), 0 1px 4px hsla(0,0%,0%,0.06);
+    --shadow-lg: 0 8px 32px hsla(0,0%,0%,0.12), 0 2px 8px hsla(0,0%,0%,0.08);
+
+    /* Background */
+    background: #f1f5f9;
+    color: var(--text);
+}
+
 /* ── Reset ──────────────────────────────────────────────── */
 * { box-sizing: border-box; }
 
@@ -78,28 +110,79 @@ body {
     gap: 16px;
     background: var(--panel);
     border-color: var(--border);
-    padding: 8px 14px;
 }
 
 .dashboard-header {
+    height: 48px;
+    padding: 0 14px;
+    box-sizing: border-box;
     border-bottom: 1px solid var(--border);
     /* Glassy top edge shimmer */
     box-shadow: 0 1px 0 var(--border), 0 2px 12px hsla(0,0%,0%,0.4);
 }
 
 .status-bar {
+    height: 22px;
+    padding: 0 14px;
+    box-sizing: border-box;
     border-top: 1px solid var(--border);
     color: var(--muted);
     font-size: 11px;
     letter-spacing: 0.01em;
 }
 
+.status-bar-time-container {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+}
+
+.status-bar-tz-wrapper {
+    color: var(--muted);
+    font-size: 11px;
+    display: inline-flex;
+    align-items: center;
+    position: relative;
+}
+
+.status-bar-tz-wrapper .tz-arrow {
+    width: 14px;
+    height: 14px;
+    fill: gray;
+    margin-left: 1px;
+    margin-right: -2px;
+}
+
+.status-bar-tz-wrapper:has(.status-bar-tz-select:focus-visible) {
+    outline: 2px solid var(--blue);
+    border-radius: 3px;
+}
+
+.status-bar-tz-select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    opacity: 0;
+    cursor: pointer;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    appearance: none;
+    border: none;
+}
+
+.status-bar-tz-select option {
+    background-color: var(--panel);
+    color: var(--text);
+}
+
 /* ── Brand ──────────────────────────────────────────────── */
 .brand-block {
     display: flex;
-    align-items: baseline;
-    gap: 12px;
+    align-items: center;
+    gap: 10px;
     min-width: 0;
+    flex-shrink: 0;
 }
 
 h1 {
@@ -113,6 +196,12 @@ h1 {
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
+}
+
+body.light-theme h1 {
+    background: linear-gradient(135deg, #0f172a 0%, #334155 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
 }
 
 /* ── Connection indicator — breathing pulse ─────────────── */
@@ -203,6 +292,7 @@ select:focus  {
 
 /* ── Charts Grid ────────────────────────────────────────── */
 .dashboard-main {
+    height: calc(100vh - 70px);
     min-height: 0;
     overflow: hidden;
     display: flex;
@@ -218,6 +308,14 @@ select:focus  {
     height: 100%;
 }
 
+.main-charts-wrapper {
+    display: flex;
+    flex-direction: row;
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+}
+
 .charts-grid {
     display: grid;
     width: 100%;
@@ -226,28 +324,28 @@ select:focus  {
     gap: 10px;
     padding: 10px;
     background: transparent;
-    overflow-y: auto;
+    overflow: hidden;
 }
 
 .layout-1 {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: minmax(280px, 1fr);
+    grid-template-rows: 1fr;
 }
 .layout-2 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-rows: minmax(280px, 1fr);
+    grid-template-rows: 1fr;
 }
 .layout-4 {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-rows: repeat(2, minmax(280px, 1fr));
+    grid-template-rows: repeat(2, 1fr);
 }
 .layout-6 {
     grid-template-columns: repeat(3, minmax(0, 1fr));
-    grid-template-rows: repeat(2, minmax(280px, 1fr));
+    grid-template-rows: repeat(2, 1fr);
 }
 .layout-8 {
     grid-template-columns: repeat(4, minmax(0, 1fr));
-    grid-template-rows: repeat(2, minmax(280px, 1fr));
+    grid-template-rows: repeat(2, 1fr);
 }
 
 /* ── Chart Pane — Floating card ─────────────────────────── */
@@ -292,6 +390,7 @@ select:focus  {
     flex-shrink: 0;
     overflow: hidden;
 }
+
 
 .pane-ticker {
     display: flex;
@@ -594,11 +693,11 @@ select:focus  {
 @media (max-width: 980px) {
     .layout-6 {
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        grid-template-rows: repeat(3, minmax(280px, 1fr));
+        grid-template-rows: repeat(3, 1fr);
     }
     .layout-8 {
         grid-template-columns: repeat(2, minmax(0, 1fr));
-        grid-template-rows: repeat(4, minmax(280px, 1fr));
+        grid-template-rows: repeat(4, 1fr);
     }
 }
 
@@ -629,6 +728,21 @@ select:focus  {
     flex-direction: column;
     gap: 2px;
     background: var(--panel-3);
+}
+
+.market-ticker-container {
+    height: 36px;
+    background: var(--panel-2);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: stretch;
+    overflow-x: auto;
+    overflow-y: hidden;
+}
+
+body.light-theme .market-ticker-container {
+    background: #ffffff;
+    border-bottom-color: #cbd5e1;
 }
 
 .sp-tabs {
@@ -1053,6 +1167,16 @@ body.light-theme .trash-btn:hover {
     color: var(--red) !important;
 }
 
+body.light-theme .chart-legend {
+    --text: #0f172a;
+    --muted: #64748b;
+}
+
+body.light-theme .legend-ind-title,
+body.light-theme .legend-ind-dot {
+    filter: brightness(0.65) contrast(1.2);
+}
+
 .indicators-list {
     display: flex;
     flex-direction: column;
@@ -1445,58 +1569,7 @@ body.light-theme .alert-action-btn:hover {
     filter: drop-shadow(0 0 8px hsla(215,90%,60%,0.3));
 }
 
-/* ── Header Nav Tabs ────────────────────────────────── */
-.header-nav {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    flex: 1;
-    justify-content: center;
-}
 
-.nav-tab {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 5px 14px;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    background: transparent;
-    color: var(--muted);
-    font-size: 12px;
-    font-weight: 600;
-    font-family: inherit;
-    cursor: pointer;
-    letter-spacing: 0.02em;
-    transition: color 180ms var(--ease), background 180ms var(--ease),
-                border-color 180ms var(--ease), transform 120ms var(--ease-out);
-    white-space: nowrap;
-    position: relative;
-}
-
-.nav-tab svg {
-    flex-shrink: 0;
-    opacity: 0.8;
-    transition: opacity 180ms var(--ease);
-}
-
-.nav-tab:hover {
-    color: var(--text);
-    background: hsla(220, 20%, 28%, 0.5);
-    border-color: var(--border);
-}
-
-.nav-tab:hover svg { opacity: 1; }
-
-.nav-tab.active {
-    color: var(--blue);
-    background: hsla(215, 90%, 60%, 0.12);
-    border-color: hsla(215, 90%, 60%, 0.3);
-}
-
-.nav-tab.active svg { opacity: 1; color: var(--blue); }
-
-.nav-tab:active { transform: scale(0.96); }
 
 /* ── Header Icon Buttons (bell, watchlist toggle) ───── */
 .header-icon-btn {
@@ -1549,16 +1622,16 @@ body.light-theme .alert-action-btn:hover {
     text-align: center;
     pointer-events: none;
     box-shadow: 0 0 0 2px var(--panel);
-    animation: breatheRed 2s ease-in-out infinite;
+    animation: badgePulse 2s ease-in-out infinite;
 }
 
 /* ── Watchlist Panel ────────────────────────────────── */
 .watchlist-panel {
     position: fixed;
-    top: 0;
+    top: 48px;
     right: 0;
     width: 230px;
-    height: 100vh;
+    height: calc(100vh - 48px - 22px);
     background: var(--panel);
     border-left: 1px solid var(--border);
     box-shadow: -4px 0 24px hsla(0,0%,0%,0.45);
@@ -1662,9 +1735,17 @@ body.light-theme .alert-action-btn:hover {
 
 .wl-left {
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
     min-width: 0;
     flex: 1;
+}
+
+.wl-symbol-details {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
 }
 
 .wl-symbol {
@@ -1829,10 +1910,382 @@ body.light-theme .ctx-item { color: #0f172a; }
 body.light-theme .ctx-item:hover { background: #eff6ff; }
 body.light-theme .ctx-separator { background: #e2e8f0; }
 
-body.light-theme .nav-tab { color: #64748b; }
-body.light-theme .nav-tab:hover { background: #f1f5f9; border-color: #cbd5e1; color: #0f172a; }
-body.light-theme .nav-tab.active { color: #2563eb; background: #eff6ff; border-color: #bfdbfe; }
+
 body.light-theme .header-icon-btn { color: #64748b; }
 body.light-theme .header-icon-btn:hover { background: #f1f5f9; border-color: #cbd5e1; color: #0f172a; }
 body.light-theme .header-icon-btn.active { color: #2563eb; background: #eff6ff; border-color: #bfdbfe; }
 
+/* ── Keyframe Animations ────────────────────────────── */
+@keyframes flashUp {
+    0%   { color: var(--green); }
+    100% { color: var(--text);  }
+}
+
+@keyframes flashDown {
+    0%   { color: var(--red); }
+    100% { color: var(--text); }
+}
+
+@keyframes badgePulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50%       { opacity: 0.7; transform: scale(1.1); }
+}
+
+/* ── Global Right Sidebar ───────────────────────────── */
+.global-right-sidebar {
+    width: 300px;
+    height: 100%;
+    flex-shrink: 0;
+    transition: width 240ms cubic-bezier(0.4, 0, 0.2, 1), opacity 240ms;
+    overflow: hidden;
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+    opacity: 1;
+}
+
+.global-right-sidebar.collapsed {
+    width: 0px !important;
+    border-left: none !important;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.global-right-sidebar .right-sidebar-wrapper {
+    width: 300px;
+    height: 100%;
+    border: none;
+    border-radius: 0;
+}
+
+/* Sidebar Toggle Divider (slim vertical bar serving as boundary handle) */
+.sidebar-toggle-divider {
+    width: 8px;
+    height: 100%;
+    background: transparent;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    border-left: 1px solid var(--border);
+    transition: background 0.15s, border-color 0.15s;
+    flex-shrink: 0;
+    user-select: none;
+    z-index: 20; /* overlay above charts */
+}
+
+/* Hover effect on the vertical divider strip */
+.sidebar-toggle-divider:hover {
+    background: var(--panel-hover);
+    border-left-color: transparent;
+}
+
+/* Slim arrow tab sticking out */
+.sidebar-toggle-arrow {
+    width: 14px;
+    height: 32px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 8px;
+    color: var(--text-muted);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    transition: background 0.15s, color 0.15s, transform 0.15s;
+    position: absolute;
+    left: -4px; /* center it on the divider line */
+}
+
+.sidebar-toggle-divider:hover .sidebar-toggle-arrow {
+    background: var(--border);
+    color: var(--text);
+    transform: scale(1.05);
+}
+
+/* Watchlist Search Form */
+.watchlist-add-form {
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    flex-shrink: 0;
+}
+
+.wl-search-container {
+    position: relative;
+    display: flex;
+    align-items: center;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.wl-search-container:focus-within {
+    border-color: var(--blue);
+    box-shadow: 0 0 0 2px var(--blue-glow);
+}
+
+.wl-search-icon {
+    position: absolute;
+    left: 9px;
+    color: var(--muted);
+    pointer-events: none;
+    flex-shrink: 0;
+}
+
+.watchlist-add-input {
+    flex: 1;
+    background: transparent;
+    border: none;
+    outline: none;
+    padding: 7px 10px 7px 28px;
+    font-size: 11.5px;
+    color: var(--text);
+    font-family: inherit;
+    width: 100%;
+}
+
+.watchlist-add-input::placeholder {
+    color: var(--subtle);
+}
+
+.wl-search-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: var(--shadow-md);
+    max-height: 220px;
+    overflow-y: auto;
+    z-index: 200;
+    display: none;
+}
+
+.wl-search-dropdown.show {
+    display: block;
+}
+
+.wl-search-option {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 10px;
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--text);
+    transition: background 100ms;
+    border-radius: 4px;
+    margin: 2px 4px;
+}
+
+.wl-search-option:hover,
+.wl-search-option.highlighted {
+    background: hsla(215, 80%, 55%, 0.14);
+    color: var(--text);
+}
+
+.wl-search-option-symbol {
+    font-weight: 700;
+    font-size: 12px;
+    min-width: 60px;
+}
+
+.wl-search-option-name {
+    color: var(--muted);
+    font-size: 10.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.wl-search-option-add {
+    margin-left: auto;
+    background: var(--blue);
+    color: #fff;
+    border: none;
+    border-radius: 3px;
+    padding: 2px 7px;
+    font-size: 10px;
+    font-weight: 600;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 100ms;
+    flex-shrink: 0;
+}
+
+.wl-search-option:hover .wl-search-option-add {
+    opacity: 1;
+}
+
+.wl-search-no-results {
+    padding: 12px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+/* Watchlist Row Remove Button */
+.wl-remove-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 0 4px;
+    margin-left: 8px;
+    display: none; /* hidden by default, shown on row hover */
+    align-items: center;
+    justify-content: center;
+    border-radius: 2px;
+    transition: color 0.15s, background 0.15s;
+}
+
+.watchlist-row:hover .wl-remove-btn {
+    display: flex;
+}
+
+.wl-remove-btn:hover {
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.1);
+}
+
+.wl-coin-icon {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    font-weight: 700;
+    color: #ffffff;
+    flex-shrink: 0;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* Custom dropdown and ticker eye symbol styles */
+.custom-select-option {
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 12px;
+    cursor: pointer;
+    transition: background 0.1s;
+}
+
+.option-symbol {
+    flex: 1;
+}
+
+.option-watchlist-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    border-radius: 4px;
+    transition: color 0.15s, background 0.15s, transform 0.1s;
+    margin-left: 8px;
+}
+
+.option-watchlist-btn:hover {
+    color: var(--primary);
+    background: rgba(59, 130, 246, 0.15);
+}
+
+.option-watchlist-btn:active {
+    transform: scale(0.9);
+}
+
+.option-watchlist-btn.added {
+    color: #10b981 !important;
+    background: rgba(16, 185, 129, 0.15) !important;
+}
+
+.ticker-watchlist-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px;
+    border-radius: 3px;
+    margin-left: 6px;
+    transition: color 0.15s, background 0.15s, transform 0.1s;
+}
+
+.market-ticker-item:hover .ticker-watchlist-btn {
+    color: var(--text);
+}
+
+.ticker-watchlist-btn:hover {
+    color: var(--primary) !important;
+    background: rgba(59, 130, 246, 0.15);
+}
+
+.ticker-watchlist-btn:active {
+    transform: scale(0.9);
+}
+
+.ticker-watchlist-btn.added {
+    color: #10b981 !important;
+    background: rgba(16, 185, 129, 0.15) !important;
+}
+
+/* Pane Ticker Watchlist Button */
+.pane-watchlist-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 3px;
+    border-radius: 4px;
+    opacity: 0.5;
+    transition: opacity 0.15s, color 0.15s, background-color 0.15s, transform 0.1s;
+}
+
+.pane-watchlist-btn:hover {
+    opacity: 1;
+    color: var(--primary);
+    background: rgba(59, 130, 246, 0.15);
+}
+
+.pane-watchlist-btn:active {
+    transform: scale(0.9);
+}
+
+.pane-watchlist-btn.added {
+    opacity: 1 !important;
+    color: #10b981 !important;
+    background: rgba(16, 185, 129, 0.15) !important;
+}
+
+/* ── Watchlist active eye state ─────────────────────────── */
+.ticker-watchlist-btn.wl-active,
+.pane-watchlist-btn.wl-active,
+.option-watchlist-btn.wl-active {
+    color: var(--blue) !important;
+    opacity: 1 !important;
+    background: rgba(59, 130, 246, 0.12);
+}
+
+.ticker-watchlist-btn.wl-active:hover,
+.pane-watchlist-btn.wl-active:hover,
+.option-watchlist-btn.wl-active:hover {
+    color: var(--red) !important;
+    background: rgba(239, 68, 68, 0.12) !important;
+}

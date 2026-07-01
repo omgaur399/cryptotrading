@@ -6,9 +6,9 @@
     <link rel="icon" href="data:,">
     <title>Local Trading Dashboard</title>
     <script src="https://unpkg.com/lightweight-charts@4.1.0/dist/lightweight-charts.standalone.production.js?v=1782040710"></script>
-    <script src="lightweight-charts-fallback.js?v=1782150000"></script>
-    <script src="toolbar.js?v=1782150000"></script>
-    <script src="drawing-primitives.js?v=1782150000"></script>
+    <script src="lightweight-charts-fallback.js?v=1782915026"></script>
+    <script src="toolbar.js?v=1782915026"></script>
+    <script src="drawing-primitives.js?v=1782915026"></script>
     <link rel="stylesheet" href="styles.css?v=1782150000">
 </head>
 <body>
@@ -22,25 +22,11 @@
                     <circle cx="28" cy="10" r="2.5" fill="hsl(145,72%,42%)"/>
                 </svg>
             </div>
-            <h1>NexChart</h1>
+            <h1>Trading Dashboard</h1>
             <span id="connection-status" class="status-indicator disconnected">Disconnected</span>
         </div>
 
-        <!-- Nav Tabs -->
-        <nav class="header-nav" role="navigation" aria-label="Main navigation">
-            <button class="nav-tab active" id="nav-tab-chart" data-tab="chart" title="Charts view">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="9" height="9" rx="1"/><rect x="13" y="2" width="9" height="9" rx="1"/><rect x="2" y="13" width="9" height="9" rx="1"/><rect x="13" y="13" width="9" height="9" rx="1"/></svg>
-                Chart
-            </button>
-            <button class="nav-tab" id="nav-tab-alerts" data-tab="alerts" title="Price Alerts">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
-                Alerts
-            </button>
-            <button class="nav-tab" id="nav-tab-backtest" data-tab="backtest" title="Backtesting">
-                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
-                Backtest
-            </button>
-        </nav>
+
 
         <div class="top-controls">
             <label for="chart-count">Charts</label>
@@ -59,6 +45,10 @@
             <!-- Watchlist toggle -->
             <button class="header-icon-btn" id="watchlist-toggle-btn" title="Watchlist" aria-label="Toggle Watchlist">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+            <!-- Sync Charts toggle -->
+            <button class="header-icon-btn" id="sync-charts-btn" title="Link/Sync Chart Scales (Sync Zoom & Pan)" aria-label="Link Chart Scales">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
             </button>
         </div>
     </header>
@@ -131,13 +121,60 @@
             </button>
         </div>
         <div class="dashboard-content">
-            <div id="charts-grid" class="charts-grid layout-4"></div>
+            <div class="main-charts-wrapper">
+                <div id="charts-grid" class="charts-grid layout-4"></div>
+                <div id="sidebar-toggle-divider" class="sidebar-toggle-divider" title="Toggle Right Sidebar">
+                    <div class="sidebar-toggle-arrow">◀</div>
+                </div>
+            <aside id="global-right-sidebar" class="global-right-sidebar collapsed" aria-label="Asset Details and Trading">
+                <div class="right-sidebar-wrapper sidebar-tabbed">
+                    <div class="sidebar-tabs-header">
+                        <div class="sidebar-tab active" data-index="0">INFO</div>
+                        <div class="sidebar-tab" data-index="1">BOOK</div>
+                        <div class="sidebar-tab" data-index="2">TRADE</div>
+                    </div>
+                    <div class="sidebar-viewport">
+                        <div id="sidebar-slider" class="sidebar-slider-tabs">
+                            <aside id="asset-info-panel" class="sidebar-panel asset-info-panel">
+                                <div class="info-panel-content">
+                                    <div id="info-panel-loading" class="info-panel-message">Select a chart to load info...</div>
+                                    <div id="info-panel-data" style="display: none;"></div>
+                                </div>
+                            </aside>
+                            <aside id="order-book-panel" class="sidebar-panel order-book-panel">
+                                <div class="ob-header">
+                                    <div id="ob-symbol-name" class="ob-symbol-name">--</div>
+                                    <div class="ob-price-row">
+                                        <span id="ob-current-price" class="ob-current-price">--</span>
+                                        <span id="ob-24h-change" class="ob-24h-change">--</span>
+                                    </div>
+                                </div>
+                                <div class="ob-col-headers">
+                                    <span>Price</span>
+                                    <span>Size</span>
+                                </div>
+                                <div class="ob-scroll-container">
+                                    <div id="ob-asks" class="ob-asks"></div>
+                                    <div id="ob-spread" class="ob-spread">--</div>
+                                    <div id="ob-bids" class="ob-bids"></div>
+                                </div>
+                            </aside>
+                            <aside id="paper-trade-panel" class="sidebar-panel paper-trade-panel"></aside>
+                        </div>
+                    </div>
+                </div>
+            </aside>
         </div>
     </main>
 
     <footer class="status-bar">
         <span id="data-status">Ready</span>
-        <span id="timestamp"></span>
+        <div class="status-bar-time-container">
+            <span id="timestamp-time"></span>
+            <span class="status-bar-tz-wrapper">
+                (<span id="global-tz-display">LCL</span><svg class="tz-arrow" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5z"/></svg><select id="global-tz-select" class="status-bar-tz-select" title="Change Timezone" aria-label="Timezone Selector"></select>)
+            </span>
+        </div>
     </footer>
 
     <!-- Watchlist Panel (right-side collapsible sidebar) -->
@@ -151,13 +188,23 @@
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
             </button>
         </div>
+        <div class="watchlist-add-form">
+            <div class="wl-search-container" id="wl-search-container">
+                <svg class="wl-search-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+                <input type="text" id="watchlist-add-input" placeholder="Search to add symbol…" class="watchlist-add-input" autocomplete="off" />
+                <div class="wl-search-dropdown" id="wl-search-dropdown"></div>
+            </div>
+        </div>
         <div class="watchlist-body" id="watchlist-body">
             <div class="watchlist-empty">
                 <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.3"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                 <p>Charts loading…</p>
             </div>
         </div>
-    </aside>
+            </aside>
+        </div>
+    </div>
+</main>
 
     <!-- Right-click context menu -->
     <div id="chart-context-menu" class="ctx-menu" role="menu" aria-hidden="true">
@@ -181,6 +228,6 @@
         </button>
     </div>
 
-    <script src="script.js?v=1782150000"></script>
+    <script src="script.js?v=1782915026"></script>
 </body>
 </html>

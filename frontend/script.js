@@ -560,7 +560,7 @@ const TimeUtils = {
     },
 
     getCurrentTime: () => {
-        const tzName = TimeUtils.timeZone === "UTC" ? "UTC" : (TimeUtils.timeZone === "America/New_York" ? "EST" : (TimeUtils.timeZone === "Asia/Kolkata" ? "IST" : "Local"));
+        const tzName = TimeUtils.timeZone === "UTC" ? "UTC" : (TimeUtils.timeZone === "America/New_York" ? "EST" : (TimeUtils.timeZone === "Asia/Kolkata" ? "IST" : "LCL"));
         return new Date().toLocaleTimeString("en-IN", { timeZone: TimeUtils.timeZone, hour12: true }) + " (" + tzName + ")";
     }
 };
@@ -581,6 +581,8 @@ const state = {
     obCentered: false,
     backtest: null, // New state for backtesting
     replay: null,
+    syncCharts: false,
+    isSyncingScales: false,
 };
 
 document.addEventListener("DOMContentLoaded", initializeApp);
@@ -649,37 +651,46 @@ async function initializeApp() {
         backtestBtn.onclick = openBacktestModal;
         chartCountEl.parentNode.appendChild(backtestBtn);
 
-        const tzSelect = document.createElement("select");
-        tzSelect.id = "global-tz-select";
-        tzSelect.className = "theme-btn";
-        tzSelect.style.marginLeft = "12px";
-        const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-        tzSelect.innerHTML = `
-            <option value="${localTz}">Local</option>
-            <option value="UTC">UTC</option>
-            <option value="America/New_York">EST</option>
-            <option value="Asia/Kolkata">IST</option>
-        `;
-        tzSelect.value = TimeUtils.timeZone;
-        if (!tzSelect.value) tzSelect.value = localTz;
-        
-        tzSelect.addEventListener("change", (e) => {
-            TimeUtils.timeZone = e.target.value;
-            localStorage.setItem("trading-dashboard-tz", e.target.value);
-            Object.values(state.charts).forEach(chartData => {
-                if (chartData.chart) chartData.chart.applyOptions({ localization: { timeFormatter: TimeUtils.formatTooltip } });
+        const tzSelect = document.getElementById("global-tz-select");
+        if (tzSelect) {
+            const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+            tzSelect.innerHTML = `
+                <option value="${localTz}">LCL</option>
+                <option value="UTC">UTC</option>
+                <option value="America/New_York">EST</option>
+                <option value="Asia/Kolkata">IST</option>
+            `;
+            tzSelect.value = TimeUtils.timeZone;
+            if (!tzSelect.value) tzSelect.value = localTz;
+            
+            const tzDisplay = document.getElementById("global-tz-display");
+            if (tzDisplay) tzDisplay.textContent = tzSelect.options[tzSelect.selectedIndex].text;
+            
+            tzSelect.addEventListener("change", (e) => {
+                TimeUtils.timeZone = e.target.value;
+                if (tzDisplay) tzDisplay.textContent = tzSelect.options[tzSelect.selectedIndex].text;
+                localStorage.setItem("trading-dashboard-tz", e.target.value);
+                Object.values(state.charts).forEach(chartData => {
+                    if (chartData.chart) chartData.chart.applyOptions({ localization: { timeFormatter: TimeUtils.formatTooltip } });
+                });
+                updateTimestamp();
             });
-            updateTimestamp();
-        });
-        chartCountEl.parentNode.appendChild(tzSelect);
+        }
 
         const themeBtn = document.createElement("button");
         themeBtn.id = "theme-toggle";
-        themeBtn.className = "theme-btn";
+        themeBtn.className = "toolbar-btn";
+        themeBtn.title = "Toggle Light/Dark Mode";
         themeBtn.textContent = state.theme === "dark" ? "☀️" : "🌙";
-        themeBtn.style.marginLeft = "12px";
+        themeBtn.style.marginTop = "auto";
+        themeBtn.style.marginBottom = "4px";
         themeBtn.onclick = toggleTheme;
-        chartCountEl.parentNode.appendChild(themeBtn);
+        const drawingToolbar = document.getElementById("drawing-toolbar");
+        if (drawingToolbar) {
+            drawingToolbar.appendChild(themeBtn);
+        } else {
+            chartCountEl.parentNode.appendChild(themeBtn);
+        }
 
         const resetGridBtn = document.createElement("button");
         resetGridBtn.id = "reset-grid-btn";
@@ -722,6 +733,15 @@ async function initializeApp() {
     const marketTicker = document.getElementById('market-ticker-container');
     if (marketTicker) {
         marketTicker.addEventListener('click', (e) => {
+            const wlBtn = e.target.closest('.ticker-watchlist-btn');
+            if (wlBtn) {
+                e.preventDefault();
+                e.stopPropagation();
+                const symbol = wlBtn.getAttribute('data-symbol');
+                if (symbol) toggleWatchlistSymbol(symbol);
+                return;
+            }
+
             const moverItem = e.target.closest('.market-ticker-item');
             if (moverItem && moverItem.dataset.symbol) {
                 const symbol = moverItem.dataset.symbol;
@@ -747,6 +767,144 @@ async function initializeApp() {
             fetchMarketMovers();
         }
     });
+
+    // --- GLOBAL COLLAPSIBLE RIGHT SIDEBAR INIT & TOGGLE ---
+    const sidebarToggleBtn = document.getElementById("sidebar-toggle-divider");
+    const globalSidebar = document.getElementById("global-right-sidebar");
+    
+    if (sidebarToggleBtn && globalSidebar) {
+        // Load persistent collapse state (default to active/not collapsed)
+        const isCollapsed = localStorage.getItem("trading-sidebar-collapsed") === "true";
+        const arrowEl = sidebarToggleBtn.querySelector(".sidebar-toggle-arrow");
+        if (isCollapsed) {
+            globalSidebar.classList.add("collapsed");
+            if (arrowEl) arrowEl.textContent = "◀";
+        } else {
+            globalSidebar.classList.remove("collapsed");
+            if (arrowEl) arrowEl.textContent = "▶";
+        }
+        
+        sidebarToggleBtn.addEventListener("click", () => {
+            const willCollapse = !globalSidebar.classList.contains("collapsed");
+            if (willCollapse) {
+                globalSidebar.classList.add("collapsed");
+                if (arrowEl) arrowEl.textContent = "◀";
+            } else {
+                globalSidebar.classList.remove("collapsed");
+                if (arrowEl) arrowEl.textContent = "▶";
+                // Refresh active chart data in sidebar on open
+                const activeChart = state.charts[state.activeChartId] || state.charts['chart-1'];
+                if (activeChart && activeChart.symbol !== 'none' && activeChart.symbol !== 'No Chart') {
+                    fetchAndRenderAssetInfo(activeChart.symbol);
+                    updateOrderBookHeader(activeChart.symbol);
+                    if (window.paperTrading) {
+                        window.paperTrading.setActiveSymbol(activeChart.symbol);
+                    }
+                }
+            }
+            localStorage.setItem("trading-sidebar-collapsed", String(willCollapse));
+            
+            // Trigger resize on all charts to adapt to new width
+            setTimeout(() => {
+                Object.values(state.charts).forEach(cd => {
+                    if (cd.chart) {
+                        const el = document.getElementById(`${cd.id}-container`);
+                        if (el) {
+                            cd.chart.resize(el.clientWidth, el.clientHeight);
+                        }
+                    }
+                });
+            }, 250);
+        });
+    }
+
+    // Persistent sidebar tabs switcher
+    const sidebarTabs = document.querySelectorAll(".global-right-sidebar .sidebar-tab");
+    const sidebarSlider = document.getElementById("sidebar-slider");
+    if (sidebarTabs && sidebarSlider) {
+        sidebarTabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                sidebarTabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                const idx = tab.dataset.index;
+                sidebarSlider.style.transform = `translateX(-${(idx * 100) / 3}%)`;
+            });
+        });
+    }
+
+    // Build the Paper Trading UI inside the static panel on start
+    if (window.paperTrading) {
+        const tradePanel = document.getElementById('paper-trade-panel');
+        if (tradePanel) {
+            window.paperTrading.buildUI(tradePanel);
+        }
+    }
+
+    // Chart Sync Toggle Setup
+    const syncChartsBtn = document.getElementById("sync-charts-btn");
+    state.syncCharts = localStorage.getItem("trading-sync-charts") === "true";
+    if (syncChartsBtn) {
+        if (state.syncCharts) {
+            syncChartsBtn.classList.add("active");
+        } else {
+            syncChartsBtn.classList.remove("active");
+        }
+        
+        syncChartsBtn.addEventListener("click", () => {
+            state.syncCharts = !state.syncCharts;
+            if (state.syncCharts) {
+                syncChartsBtn.classList.add("active");
+                // Sync all charts immediately to the active one
+                const activeChart = state.charts[state.activeChartId] || state.charts['chart-1'];
+                if (activeChart && activeChart.chart) {
+                    const range = activeChart.chart.timeScale().getVisibleLogicalRange();
+                    if (range) {
+                        syncTimeScales(activeChart.id, range);
+                    }
+                }
+            } else {
+                syncChartsBtn.classList.remove("active");
+            }
+            localStorage.setItem("trading-sync-charts", String(state.syncCharts));
+        });
+    }
+
+    // Show sync btn only when >1 chart is active
+    const updateSyncBtnVisibility = () => {
+        const btn = document.getElementById("sync-charts-btn");
+        if (btn) btn.style.display = state.chartCount === 1 ? "none" : "";
+    };
+    updateSyncBtnVisibility();
+    // Expose so setChartCount can call it
+    window._updateSyncBtnVisibility = updateSyncBtnVisibility;
+}
+
+function syncTimeScales(sourceChartId, logicalRange) {
+    if (state.isSyncingScales || !state.syncCharts) return;
+    state.isSyncingScales = true;
+    
+    const sourceChart = state.charts[sourceChartId];
+    const sourceOffset = sourceChart ? getMarginOffset(sourceChart) : 8;
+    
+    Object.values(state.charts).forEach(cd => {
+        if (cd.id !== sourceChartId && cd.chart) {
+            try {
+                const targetOffset = getMarginOffset(cd);
+                const offsetDiff = targetOffset - sourceOffset;
+                const adjustedRange = {
+                    from: logicalRange.from + offsetDiff,
+                    to: logicalRange.to + offsetDiff
+                };
+                cd.chart.timeScale().setVisibleLogicalRange(adjustedRange);
+            } catch(e) {
+                console.warn("Failed to sync timescale range", e);
+            }
+        }
+    });
+    
+    setTimeout(() => {
+        state.isSyncingScales = false;
+    }, 100);
 }
 
 function readSavedChartCount() {
@@ -910,8 +1068,8 @@ function connectLiveStream() {
                     });
                 });
             } else if (data.channel === 'l2Book' && data.data) {
-                renderOrderBook(data.data);
-                if (state.chartCount === 1 && state.charts['chart-1'] && state.charts['chart-1'].symbol === data.data.coin) {
+                const activeChart = state.charts[state.activeChartId];
+                if (activeChart && activeChart.symbol === data.data.coin) {
                     renderOrderBook(data.data);
                 }
             }
@@ -924,12 +1082,13 @@ function setChartCount(count) {
     state.chartCount = safeCount;
     localStorage.setItem(CONFIG.STORAGE_KEY, String(safeCount));
     renderGrid();
+    // Hide sync button in single-chart mode
+    if (window._updateSyncBtnVisibility) window._updateSyncBtnVisibility();
 }
 
 function renderGrid() {
     const grid = document.getElementById("charts-grid");
     grid.className = `charts-grid layout-${state.chartCount}`;
-    grid.className = `charts-grid layout-${state.chartCount}${state.chartCount === 1 ? ' with-info-panel' : ''}`;
     grid.innerHTML = "";
 
     Object.values(state.charts).forEach(chartData => {
@@ -937,6 +1096,7 @@ function renderGrid() {
         if (chartData.chart) chartData.chart.remove();
     });
     state.charts = {};
+    state.activeChartId = null;
 
     const savedLayout = getSavedLayoutState();
 
@@ -963,12 +1123,63 @@ function renderGrid() {
         let targetSymbol = savedConfig.symbol || defaultConfig.symbol;
         let targetInterval = savedConfig.interval || defaultConfig.interval;
         let targetIndicators = savedConfig.indicators || {
-            volume: true, sma: false, ema: false, smaPeriod: 20, emaPeriod: 20
+            volume: true,
+            sma1: false, sma2: false, sma3: false,
+            ema1: false, ema2: false, ema3: false
         };
-        targetIndicators.smaColor = targetIndicators.smaColor || '#f59e0b';
-        targetIndicators.emaColor = targetIndicators.emaColor || '#3b82f6';
-        targetIndicators.smaLineWidth = targetIndicators.smaLineWidth || 1;
-        targetIndicators.emaLineWidth = targetIndicators.emaLineWidth || 1;
+
+        if (targetIndicators.sma !== undefined && targetIndicators.sma1 === undefined) {
+            targetIndicators.sma1 = targetIndicators.sma;
+        }
+        if (targetIndicators.ema !== undefined && targetIndicators.ema1 === undefined) {
+            targetIndicators.ema1 = targetIndicators.ema;
+        }
+
+        // SMA 1 Defaults
+        targetIndicators.sma1 = targetIndicators.sma1 || false;
+        targetIndicators.sma1Period = targetIndicators.sma1Period || targetIndicators.smaPeriod || 20;
+        targetIndicators.sma1Color = targetIndicators.sma1Color || targetIndicators.smaColor || '#f59e0b';
+        targetIndicators.sma1LineWidth = targetIndicators.sma1LineWidth || targetIndicators.smaLineWidth || 1;
+
+        // SMA 2 Defaults
+        targetIndicators.sma2 = targetIndicators.sma2 || false;
+        targetIndicators.sma2Period = targetIndicators.sma2Period || 50;
+        targetIndicators.sma2Color = targetIndicators.sma2Color || '#10b981';
+        targetIndicators.sma2LineWidth = targetIndicators.sma2LineWidth || 1;
+
+        // SMA 3 Defaults
+        targetIndicators.sma3 = targetIndicators.sma3 || false;
+        targetIndicators.sma3Period = targetIndicators.sma3Period || 200;
+        targetIndicators.sma3Color = targetIndicators.sma3Color || '#ef4444';
+        targetIndicators.sma3LineWidth = targetIndicators.sma3LineWidth || 1;
+
+        // EMA 1 Defaults
+        targetIndicators.ema1 = targetIndicators.ema1 || false;
+        targetIndicators.ema1Period = targetIndicators.ema1Period || targetIndicators.emaPeriod || 9;
+        targetIndicators.ema1Color = targetIndicators.ema1Color || targetIndicators.emaColor || '#3b82f6';
+        targetIndicators.ema1LineWidth = targetIndicators.ema1LineWidth || targetIndicators.emaLineWidth || 1;
+
+        // EMA 2 Defaults
+        targetIndicators.ema2 = targetIndicators.ema2 || false;
+        targetIndicators.ema2Period = targetIndicators.ema2Period || 21;
+        targetIndicators.ema2Color = targetIndicators.ema2Color || '#a855f7';
+        targetIndicators.ema2LineWidth = targetIndicators.ema2LineWidth || 1;
+
+        // EMA 3 Defaults
+        targetIndicators.ema3 = targetIndicators.ema3 || false;
+        targetIndicators.ema3Period = targetIndicators.ema3Period || 50;
+        targetIndicators.ema3Color = targetIndicators.ema3Color || '#ec4899';
+        targetIndicators.ema3LineWidth = targetIndicators.ema3LineWidth || 1;
+
+        // Keep aliases for backward compatibility
+        targetIndicators.sma = targetIndicators.sma1;
+        targetIndicators.smaPeriod = targetIndicators.sma1Period;
+        targetIndicators.smaColor = targetIndicators.sma1Color;
+        targetIndicators.smaLineWidth = targetIndicators.sma1LineWidth;
+        targetIndicators.ema = targetIndicators.ema1;
+        targetIndicators.emaPeriod = targetIndicators.ema1Period;
+        targetIndicators.emaColor = targetIndicators.ema1Color;
+        targetIndicators.emaLineWidth = targetIndicators.ema1LineWidth;
         targetIndicators.bb = targetIndicators.bb || false;
         targetIndicators.bbPeriod = targetIndicators.bbPeriod || 20;
         targetIndicators.bbStdDev = targetIndicators.bbStdDev || 2;
@@ -1008,7 +1219,13 @@ function renderGrid() {
             candleSeries: null,
             volumeSeries: null,
             smaSeries: null,
+            smaSeries1: null,
+            smaSeries2: null,
+            smaSeries3: null,
             emaSeries: null,
+            emaSeries1: null,
+            emaSeries2: null,
+            emaSeries3: null,
             bbUpperSeries: null,
             bbMiddleSeries: null,
             bbLowerSeries: null,
@@ -1040,21 +1257,6 @@ function renderGrid() {
 
     const nextActive = state.charts[state.activeChartId] ? state.activeChartId : 'chart-1';
     setActiveChart(nextActive);
-    if (state.chartCount === 1) {
-        state.obCentered = false;
-        grid.appendChild(createInfoPanel());
-            
-            if (window.paperTrading) {
-                const tradePanel = document.getElementById('paper-trade-panel');
-                if (tradePanel) window.paperTrading.buildUI(tradePanel);
-            }
-            
-        const chartData = state.charts['chart-1'];
-        if (chartData && chartData.symbol !== 'none' && chartData.symbol !== 'No Chart') {
-            fetchAndRenderAssetInfo(chartData.symbol);
-            updateOrderBookHeader(chartData.symbol);
-        }
-    }
 
     // Reset inline styles before applying new layout to prevent bleed-over
     grid.style.gridTemplateColumns = '';
@@ -1261,8 +1463,12 @@ function createChartPane(chartData, index) {
     pane.addEventListener('click', () => setActiveChart(chartData.id));
 
     const volText = chartData.indicators.volume ? "On" : "Off";
-    const smaText = chartData.indicators.sma ? "On" : "Off";
-    const emaText = chartData.indicators.ema ? "On" : "Off";
+    const sma1Text = chartData.indicators.sma1 ? "On" : "Off";
+    const sma2Text = chartData.indicators.sma2 ? "On" : "Off";
+    const sma3Text = chartData.indicators.sma3 ? "On" : "Off";
+    const ema1Text = chartData.indicators.ema1 ? "On" : "Off";
+    const ema2Text = chartData.indicators.ema2 ? "On" : "Off";
+    const ema3Text = chartData.indicators.ema3 ? "On" : "Off";
     const bbText = chartData.indicators.bb ? "On" : "Off";
     const rsiText = chartData.indicators.rsi ? "On" : "Off";
     const vwapText = chartData.indicators.vwap ? "On" : "Off";
@@ -1272,6 +1478,9 @@ function createChartPane(chartData, index) {
         <div class="pane-header" id="${chartData.id}-ticker">
             <div class="pane-ticker">
                 <span class="ticker-symbol">Pane ${index}</span>
+                <button class="pane-watchlist-btn" title="Add to Watchlist" data-chart-id="${chartData.id}">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
                 <span class="ticker-price">--</span>
                 <span class="ticker-change">--</span>
             </div>
@@ -1291,8 +1500,12 @@ function createChartPane(chartData, index) {
                 <select class="pane-select indicator-select" aria-label="Indicators" title="Indicators">
                     <option value="" disabled selected>ƒx</option>
                     <option value="volume">Volume (${volText})</option>
-                    <option value="sma">SMA ${chartData.indicators.smaPeriod} (${smaText})</option>
-                    <option value="ema">EMA ${chartData.indicators.emaPeriod} (${emaText})</option>
+                    <option value="sma1">SMA 1 (${chartData.indicators.sma1Period}) (${sma1Text})</option>
+                    <option value="sma2">SMA 2 (${chartData.indicators.sma2Period}) (${sma2Text})</option>
+                    <option value="sma3">SMA 3 (${chartData.indicators.sma3Period}) (${sma3Text})</option>
+                    <option value="ema1">EMA 1 (${chartData.indicators.ema1Period}) (${ema1Text})</option>
+                    <option value="ema2">EMA 2 (${chartData.indicators.ema2Period}) (${ema2Text})</option>
+                    <option value="ema3">EMA 3 (${chartData.indicators.ema3Period}) (${ema3Text})</option>
                     <option value="bb">BB ${chartData.indicators.bbPeriod} (${bbText})</option>
                     <option value="rsi">RSI ${chartData.indicators.rsiPeriod} (${rsiText})</option>
                     <option value="vwap">VWAP (${vwapText})</option>
@@ -1308,9 +1521,6 @@ function createChartPane(chartData, index) {
                 </button>
                 <button class="settings-btn" id="${chartData.id}-go-live" title="Reset Chart View">
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polygon points="5 4 15 12 5 20"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
-                </button>
-                <button class="settings-btn" id="${chartData.id}-settings" title="Chart Settings">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                 </button>
             </div>
         </div>
@@ -1329,7 +1539,6 @@ function populatePaneControls(chartData) {
     const symbolContainer = pane.querySelector(".symbol-select-container");
     const intervalSelect = pane.querySelector(".interval-select");
     const indicatorSelect = pane.querySelector(".indicator-select");
-    const settingsBtn = pane.querySelector(`#${chartData.id}-settings`);
     const goLiveBtn = pane.querySelector(`#${chartData.id}-go-live`);
     const replayToggleBtn = pane.querySelector(`#${chartData.id}-replay-toggle`);
 
@@ -1349,11 +1558,16 @@ function populatePaneControls(chartData) {
                 <span class="option-symbol">No Chart</span>
             </div>`;
         }
-        html += filtered.map(item => 
-            `<div class="custom-select-option" data-id="${item.id}">
+        const wlList = (watchlistState && watchlistState.symbolsList) || [];
+        html += filtered.map(item => {
+            const inWl = wlList.includes(item.symbol);
+            return `<div class="custom-select-option" data-id="${item.id}">
                 <span class="option-symbol">${item.symbol}</span>
-            </div>`
-        ).join("");
+                <button class="option-watchlist-btn${inWl ? ' wl-active' : ''}" title="${inWl ? 'Remove from Watchlist' : 'Add to Watchlist'}" data-symbol="${item.symbol}">
+                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
+            </div>`;
+        }).join("");
         dropdown.innerHTML = html;
         highlightedIndex = -1;
     };
@@ -1414,14 +1628,30 @@ function populatePaneControls(chartData) {
         });
     }
 
-    settingsBtn.addEventListener("click", () => openSettingsModal(chartData));
+    const paneWatchlistBtn = pane.querySelector(".pane-watchlist-btn");
+    if (paneWatchlistBtn) {
+        // Set initial active state
+        const sym0 = chartData.symbol;
+        if (sym0 && sym0 !== 'none' && watchlistState && watchlistState.symbolsList && watchlistState.symbolsList.includes(sym0)) {
+            paneWatchlistBtn.classList.add('wl-active');
+            paneWatchlistBtn.title = 'Remove from Watchlist';
+        }
+
+        paneWatchlistBtn.addEventListener("click", (e) => {
+            e.stopPropagation();
+            const symbol = chartData.symbol;
+            if (symbol && symbol !== "No Chart" && symbol !== "none") {
+                toggleWatchlistSymbol(symbol);
+            }
+        });
+    }
 
     goLiveBtn.addEventListener("click", () => {
         if (chartData.chart) {
             chartData.customPriceOffset = 0;
             // Reset zoom (barSpacing) and right margin
-            chartData.chart.timeScale().applyOptions({ rightOffset: 7, barSpacing: 8 });
-            chartData.chart.timeScale().scrollToRealTime(); // Jump to newest candle
+            chartData.chart.timeScale().applyOptions({ rightOffset: getRightOffset(chartData), barSpacing: 8 });
+            scrollToNewestActualCandle(chartData);
             chartData.chart.priceScale('right').applyOptions({ autoScale: true });
         }
     });
@@ -1495,6 +1725,17 @@ function populatePaneControls(chartData) {
     });
 
     dropdown.addEventListener("click", (e) => {
+        const wlBtn = e.target.closest(".option-watchlist-btn");
+        if (wlBtn) {
+            e.preventDefault();
+            e.stopPropagation();
+            const symbol = wlBtn.getAttribute("data-symbol");
+            if (symbol) toggleWatchlistSymbol(symbol);
+            // syncAllWatchlistBtns() (called inside toggleWatchlistSymbol) already
+            // updates the wl-active class in-place — no need to re-render the dropdown
+            return;
+        }
+
         const option = e.target.closest(".custom-select-option");
         if (option) {
             e.preventDefault();
@@ -1547,24 +1788,62 @@ function populatePaneControls(chartData) {
             }
             updateSubchartMargins(chartData);
             e.target.options[1].text = `Volume (${chartData.indicators.volume ? 'On' : 'Off'})`;
-        } else if (indicator === "sma") {
-            chartData.indicators.sma = !chartData.indicators.sma;
-            if (chartData.smaSeries) {
-                if (chartData.indicators.sma) {
-                    chartData.smaSeries.setData(calculateSMA(chartData.cachedData, chartData.indicators.smaPeriod));
+        } else if (indicator === "sma1") {
+            chartData.indicators.sma1 = !chartData.indicators.sma1;
+            chartData.indicators.sma = chartData.indicators.sma1;
+            if (chartData.smaSeries1) {
+                if (chartData.indicators.sma1) {
+                    chartData.smaSeries1.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma1Period));
                 }
-                chartData.smaSeries.applyOptions({ visible: chartData.indicators.sma });
+                chartData.smaSeries1.applyOptions({ visible: chartData.indicators.sma1 });
             }
-            e.target.options[2].text = `SMA ${chartData.indicators.smaPeriod} (${chartData.indicators.sma ? 'On' : 'Off'})`;
-        } else if (indicator === "ema") {
-            chartData.indicators.ema = !chartData.indicators.ema;
-            if (chartData.emaSeries) {
-                if (chartData.indicators.ema) {
-                    chartData.emaSeries.setData(calculateEMA(chartData.cachedData, chartData.indicators.emaPeriod));
+            e.target.options[2].text = `SMA 1 (${chartData.indicators.sma1Period}) (${chartData.indicators.sma1 ? 'On' : 'Off'})`;
+        } else if (indicator === "sma2") {
+            chartData.indicators.sma2 = !chartData.indicators.sma2;
+            if (chartData.smaSeries2) {
+                if (chartData.indicators.sma2) {
+                    chartData.smaSeries2.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma2Period));
                 }
-                chartData.emaSeries.applyOptions({ visible: chartData.indicators.ema });
+                chartData.smaSeries2.applyOptions({ visible: chartData.indicators.sma2 });
             }
-            e.target.options[3].text = `EMA ${chartData.indicators.emaPeriod} (${chartData.indicators.ema ? 'On' : 'Off'})`;
+            e.target.options[3].text = `SMA 2 (${chartData.indicators.sma2Period}) (${chartData.indicators.sma2 ? 'On' : 'Off'})`;
+        } else if (indicator === "sma3") {
+            chartData.indicators.sma3 = !chartData.indicators.sma3;
+            if (chartData.smaSeries3) {
+                if (chartData.indicators.sma3) {
+                    chartData.smaSeries3.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma3Period));
+                }
+                chartData.smaSeries3.applyOptions({ visible: chartData.indicators.sma3 });
+            }
+            e.target.options[4].text = `SMA 3 (${chartData.indicators.sma3Period}) (${chartData.indicators.sma3 ? 'On' : 'Off'})`;
+        } else if (indicator === "ema1") {
+            chartData.indicators.ema1 = !chartData.indicators.ema1;
+            chartData.indicators.ema = chartData.indicators.ema1;
+            if (chartData.emaSeries1) {
+                if (chartData.indicators.ema1) {
+                    chartData.emaSeries1.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema1Period));
+                }
+                chartData.emaSeries1.applyOptions({ visible: chartData.indicators.ema1 });
+            }
+            e.target.options[5].text = `EMA 1 (${chartData.indicators.ema1Period}) (${chartData.indicators.ema1 ? 'On' : 'Off'})`;
+        } else if (indicator === "ema2") {
+            chartData.indicators.ema2 = !chartData.indicators.ema2;
+            if (chartData.emaSeries2) {
+                if (chartData.indicators.ema2) {
+                    chartData.emaSeries2.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema2Period));
+                }
+                chartData.emaSeries2.applyOptions({ visible: chartData.indicators.ema2 });
+            }
+            e.target.options[6].text = `EMA 2 (${chartData.indicators.ema2Period}) (${chartData.indicators.ema2 ? 'On' : 'Off'})`;
+        } else if (indicator === "ema3") {
+            chartData.indicators.ema3 = !chartData.indicators.ema3;
+            if (chartData.emaSeries3) {
+                if (chartData.indicators.ema3) {
+                    chartData.emaSeries3.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema3Period));
+                }
+                chartData.emaSeries3.applyOptions({ visible: chartData.indicators.ema3 });
+            }
+            e.target.options[7].text = `EMA 3 (${chartData.indicators.ema3Period}) (${chartData.indicators.ema3 ? 'On' : 'Off'})`;
         } else if (indicator === "bb") {
             chartData.indicators.bb = !chartData.indicators.bb;
             if (chartData.bbUpperSeries) {
@@ -1578,7 +1857,7 @@ function populatePaneControls(chartData) {
                 chartData.bbMiddleSeries.applyOptions({ visible: chartData.indicators.bb });
                 chartData.bbLowerSeries.applyOptions({ visible: chartData.indicators.bb });
             }
-            e.target.options[4].text = `BB ${chartData.indicators.bbPeriod} (${chartData.indicators.bb ? 'On' : 'Off'})`;
+            e.target.options[8].text = `BB ${chartData.indicators.bbPeriod} (${chartData.indicators.bb ? 'On' : 'Off'})`;
         } else if (indicator === "rsi") {
             chartData.indicators.rsi = !chartData.indicators.rsi;
             if (chartData.rsiSeries) {
@@ -1588,7 +1867,7 @@ function populatePaneControls(chartData) {
                 chartData.rsiSeries.applyOptions({ visible: chartData.indicators.rsi });
             }
             updateSubchartMargins(chartData);
-            e.target.options[5].text = `RSI ${chartData.indicators.rsiPeriod} (${chartData.indicators.rsi ? 'On' : 'Off'})`;
+            e.target.options[9].text = `RSI ${chartData.indicators.rsiPeriod} (${chartData.indicators.rsi ? 'On' : 'Off'})`;
         } else if (indicator === "vwap") {
             chartData.indicators.vwap = !chartData.indicators.vwap;
             if (chartData.vwapSeries) {
@@ -1597,7 +1876,7 @@ function populatePaneControls(chartData) {
                 }
                 chartData.vwapSeries.applyOptions({ visible: chartData.indicators.vwap });
             }
-            e.target.options[6].text = `VWAP (${chartData.indicators.vwap ? 'On' : 'Off'})`;
+            e.target.options[10].text = `VWAP (${chartData.indicators.vwap ? 'On' : 'Off'})`;
         } else if (indicator === "atr") {
             chartData.indicators.atr = !chartData.indicators.atr;
             if (chartData.atrSeries) {
@@ -1607,15 +1886,11 @@ function populatePaneControls(chartData) {
                 chartData.atrSeries.applyOptions({ visible: chartData.indicators.atr });
             }
             updateSubchartMargins(chartData);
-            e.target.options[7].text = `ATR ${chartData.indicators.atrPeriod} (${chartData.indicators.atr ? 'On' : 'Off'})`;
+            e.target.options[11].text = `ATR ${chartData.indicators.atrPeriod} (${chartData.indicators.atr ? 'On' : 'Off'})`;
         } else if (indicator === "vpvr") {
             chartData.indicators.vpvr = !chartData.indicators.vpvr;
-            if (chartData.indicators.vpvr) {
-                drawVolumeProfile(chartData);
-            } else {
-                clearVolumeProfile(chartData);
-            }
-            e.target.options[8].text = `Vol Profile (${chartData.indicators.vpvr ? 'On' : 'Off'})`;
+            updateVpvrMarginAndScroll(chartData);
+            e.target.options[12].text = `Vol Profile (${chartData.indicators.vpvr ? 'On' : 'Off'})`;
         } else if (indicator === "sessions") {
             chartData.indicators.sessions = !chartData.indicators.sessions;
             if (chartData.indicators.sessions) {
@@ -1623,7 +1898,7 @@ function populatePaneControls(chartData) {
             } else {
                 clearSessionBands(chartData);
             }
-            e.target.options[9].text = `Sessions (${chartData.indicators.sessions ? 'On' : 'Off'})`;
+            e.target.options[13].text = `Sessions (${chartData.indicators.sessions ? 'On' : 'Off'})`;
         }
         e.target.value = ""; // Reset the dropdown back to the "ƒx" placeholder
         saveLayoutState();
@@ -1714,7 +1989,7 @@ function initializeChart(chartData) {
             secondsVisible: false,
             borderColor: themeOptions.timeScale.borderColor,
             tickMarkFormatter: TimeUtils.formatAxis,
-            rightOffset: 50,          // enough future bars to pan and draw into
+            rightOffset: 1,
             barSpacing: 8,
             minBarSpacing: 1,
             shiftVisibleRangeOnNewBar: true,
@@ -1765,10 +2040,16 @@ function initializeChart(chartData) {
     let isDragging = false;
     let draggingLineInfo = null;
     
-    // --- INFINITE SCROLL PAGINATION ---
+    // --- INFINITE SCROLL PAGINATION & SYNC ---
     if (typeof chartData.chart.timeScale().subscribeVisibleLogicalRangeChange === "function") {
         chartData.chart.timeScale().subscribeVisibleLogicalRangeChange((logicalRange) => {
-            if (!logicalRange || chartData.isFetchingHistory || chartData.hasReachedBeginning) return;
+            if (!logicalRange) return;
+            
+            if (state.syncCharts) {
+                syncTimeScales(chartData.id, logicalRange);
+            }
+            
+            if (chartData.isFetchingHistory || chartData.hasReachedBeginning) return;
             
             // If user scrolls within 100 bars of the oldest loaded candle, fetch more
             if (logicalRange.from < 100) {
@@ -2310,8 +2591,8 @@ function initializeChart(chartData) {
             }
         } else {
             chartData.customPriceOffset = 0;
-            chartData.chart.timeScale().applyOptions({ rightOffset: 7, barSpacing: 8 });
-            chartData.chart.timeScale().scrollToRealTime();
+            chartData.chart.timeScale().applyOptions({ rightOffset: getRightOffset(chartData), barSpacing: 8 });
+            scrollToNewestActualCandle(chartData);
             chartData.chart.priceScale('right').applyOptions({ autoScale: true });
         }
     });
@@ -2475,21 +2756,51 @@ function initializeChart(chartData) {
         chartData.volumeSeries.applyOptions({ visible: false });
     }
 
-    chartData.smaSeries = chartData.chart.addLineSeries({
-        color: chartData.indicators.smaColor,
-        lineWidth: chartData.indicators.smaLineWidth,
-        visible: chartData.indicators.sma,
+    chartData.smaSeries1 = chartData.chart.addLineSeries({
+        color: chartData.indicators.sma1Color,
+        lineWidth: chartData.indicators.sma1LineWidth,
+        visible: chartData.indicators.sma1,
         lastValueVisible: false,
         priceLineVisible: false,
     });
+    chartData.smaSeries2 = chartData.chart.addLineSeries({
+        color: chartData.indicators.sma2Color,
+        lineWidth: chartData.indicators.sma2LineWidth,
+        visible: chartData.indicators.sma2,
+        lastValueVisible: false,
+        priceLineVisible: false,
+    });
+    chartData.smaSeries3 = chartData.chart.addLineSeries({
+        color: chartData.indicators.sma3Color,
+        lineWidth: chartData.indicators.sma3LineWidth,
+        visible: chartData.indicators.sma3,
+        lastValueVisible: false,
+        priceLineVisible: false,
+    });
+    chartData.smaSeries = chartData.smaSeries1; // alias for backward compatibility
     
-    chartData.emaSeries = chartData.chart.addLineSeries({
-        color: chartData.indicators.emaColor,
-        lineWidth: chartData.indicators.emaLineWidth,
-        visible: chartData.indicators.ema,
+    chartData.emaSeries1 = chartData.chart.addLineSeries({
+        color: chartData.indicators.ema1Color,
+        lineWidth: chartData.indicators.ema1LineWidth,
+        visible: chartData.indicators.ema1,
         lastValueVisible: false,
         priceLineVisible: false,
     });
+    chartData.emaSeries2 = chartData.chart.addLineSeries({
+        color: chartData.indicators.ema2Color,
+        lineWidth: chartData.indicators.ema2LineWidth,
+        visible: chartData.indicators.ema2,
+        lastValueVisible: false,
+        priceLineVisible: false,
+    });
+    chartData.emaSeries3 = chartData.chart.addLineSeries({
+        color: chartData.indicators.ema3Color,
+        lineWidth: chartData.indicators.ema3LineWidth,
+        visible: chartData.indicators.ema3,
+        lastValueVisible: false,
+        priceLineVisible: false,
+    });
+    chartData.emaSeries = chartData.emaSeries1; // alias for backward compatibility
     
     const bbOptions = {
         color: chartData.indicators.bbColor, lineWidth: chartData.indicators.bbLineWidth,
@@ -2555,6 +2866,12 @@ function initializeChart(chartData) {
         chartData.atrSeries.applyOptions({ visible: false });
     }
 
+    chartData.futureWhitespaceSeries = chartData.chart.addLineSeries({
+        visible: false,
+        lastValueVisible: false,
+        priceLineVisible: false
+    });
+
     updateSubchartMargins(chartData);
 
     // Bind drawing handle drag events for the drawing manager
@@ -2564,7 +2881,13 @@ function initializeChart(chartData) {
 
     // Add diagnostics requested for wheel event investigation
     setTimeout(() => runWheelDiagnostics(chartData.id), 1000);
+
+    // Attach right-click context menu to this chart
+    if (typeof window.attachChartContextMenu === 'function') {
+        window.attachChartContextMenu(chartData);
+    }
 }
+
 
 function resetChart(chartData) {
     chartData.isFetchingHistory = false;
@@ -2586,6 +2909,7 @@ function resetChart(chartData) {
     if (chartData.rsiSeries) chartData.rsiSeries.setData([]);
     if (chartData.vwapSeries) chartData.vwapSeries.setData([]);
     if (chartData.atrSeries) chartData.atrSeries.setData([]);
+    if (chartData.futureWhitespaceSeries) chartData.futureWhitespaceSeries.setData([]);
     
     chartData.drawingMode = null;
     const container = document.getElementById(`${chartData.id}-container`);
@@ -3421,8 +3745,8 @@ async function loadChartData(chartData) {
         const forceReset = () => {
             if (!chartData.chart) return;
             try {
-                chartData.chart.timeScale().applyOptions({ rightOffset: 7, barSpacing: 8 });
-                chartData.chart.timeScale().scrollToRealTime();
+                chartData.chart.timeScale().applyOptions({ rightOffset: getRightOffset(chartData), barSpacing: 8 });
+                scrollToNewestActualCandle(chartData);
                 chartData.chart.priceScale('right').applyOptions({ autoScale: true });
             } catch(e) {}
         };
@@ -3475,7 +3799,10 @@ function syncChartWithCache(chartData) {
     }
     
     let finalData = mainData;
-    if (mainData.length > 0) {
+    
+    chartData.candleSeries.setData(finalData);
+
+    if (chartData.futureWhitespaceSeries && mainData.length > 0) {
         const lastCandle = mainData[mainData.length - 1];
         let lastTime;
         if (typeof lastCandle.time === 'object' && lastCandle.time !== null) {
@@ -3488,13 +3815,12 @@ function syncChartWithCache(chartData) {
         
         const intervalSec = getIntervalSeconds(chartData.interval);
         const futureWhitespace = [];
+        const val = lastCandle.close !== undefined ? lastCandle.close : lastCandle.value;
         for (let i = 1; i <= 150; i++) {
-            futureWhitespace.push({ time: lastTime + i * intervalSec });
+            futureWhitespace.push({ time: lastTime + i * intervalSec, value: val });
         }
-        finalData = mainData.concat(futureWhitespace);
+        chartData.futureWhitespaceSeries.setData(futureWhitespace);
     }
-    
-    chartData.candleSeries.setData(finalData);
     
     if (chartData.indicators.volume && chartData.volumeSeries) {
         chartData.volumeSeries.setData(chartData.cachedData.map(c => ({
@@ -3503,11 +3829,23 @@ function syncChartWithCache(chartData) {
             color: c.close >= c.open ? 'rgba(22, 163, 74, 0.4)' : 'rgba(220, 38, 38, 0.4)'
         })));
     }
-    if (chartData.indicators.sma && chartData.smaSeries) {
-        chartData.smaSeries.setData(calculateSMA(chartData.cachedData, chartData.indicators.smaPeriod));
+    if (chartData.indicators.sma1 && chartData.smaSeries1) {
+        chartData.smaSeries1.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma1Period));
     }
-    if (chartData.indicators.ema && chartData.emaSeries) {
-        chartData.emaSeries.setData(calculateEMA(chartData.cachedData, chartData.indicators.emaPeriod));
+    if (chartData.indicators.sma2 && chartData.smaSeries2) {
+        chartData.smaSeries2.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma2Period));
+    }
+    if (chartData.indicators.sma3 && chartData.smaSeries3) {
+        chartData.smaSeries3.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma3Period));
+    }
+    if (chartData.indicators.ema1 && chartData.emaSeries1) {
+        chartData.emaSeries1.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema1Period));
+    }
+    if (chartData.indicators.ema2 && chartData.emaSeries2) {
+        chartData.emaSeries2.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema2Period));
+    }
+    if (chartData.indicators.ema3 && chartData.emaSeries3) {
+        chartData.emaSeries3.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema3Period));
     }
     if (chartData.indicators.bb && chartData.bbUpperSeries) {
         const bbData = calculateBB(chartData.cachedData, chartData.indicators.bbPeriod, chartData.indicators.bbStdDev);
@@ -3530,6 +3868,69 @@ function syncChartWithCache(chartData) {
     if (chartData.indicators.sessions) drawSessionBands(chartData);
     
     updateChartLegend(chartData);
+}
+
+function updateVpvrMarginAndScroll(chartData) {
+    if (!chartData || !chartData.chart) return;
+    
+    chartData.chart.timeScale().applyOptions({ rightOffset: getRightOffset(chartData) });
+    
+    setTimeout(() => {
+        scrollToNewestActualCandle(chartData);
+        
+        const isVpvrActive = chartData.indicators && chartData.indicators.vpvr && chartData.indicators.vpvrVisible !== false;
+        const canvas = _ensureVPCanvas(chartData);
+        if (canvas) {
+            canvas.style.display = isVpvrActive ? 'block' : 'none';
+        }
+        
+        if (isVpvrActive) {
+            drawVolumeProfile(chartData);
+        } else {
+            clearVolumeProfile(chartData);
+        }
+        
+        const pane = document.getElementById(chartData.id);
+        const legendEl = pane ? pane.querySelector(".chart-legend") : null;
+        if (legendEl) delete legendEl.dataset.structKey;
+        updateChartLegend(chartData);
+    }, 50);
+}
+
+function getRightOffset(chartData) {
+    const isVpvrActive = chartData && chartData.indicators && chartData.indicators.vpvr && chartData.indicators.vpvrVisible !== false;
+    if (isVpvrActive) {
+        return (state && state.chartCount === 1) ? 19 : 11;
+    }
+    return 1;
+}
+
+function getMarginOffset(chartData) {
+    const isVpvrActive = chartData && chartData.indicators && chartData.indicators.vpvr && chartData.indicators.vpvrVisible !== false;
+    if (isVpvrActive) {
+        return (state && state.chartCount === 1) ? 20 : 12;
+    }
+    return 2;
+}
+
+function scrollToNewestActualCandle(chartData) {
+    if (!chartData.chart || !chartData.cachedData || chartData.cachedData.length === 0) return;
+    try {
+        const timeScale = chartData.chart.timeScale();
+        const visibleRange = timeScale.getVisibleLogicalRange();
+        let visibleCount = 100;
+        if (visibleRange) {
+            visibleCount = Math.round(visibleRange.to - visibleRange.from);
+            if (visibleCount <= 0 || visibleCount > 1000) visibleCount = 100;
+        }
+        const lastIndex = chartData.cachedData.length - 1;
+        timeScale.setVisibleLogicalRange({
+            from: lastIndex - visibleCount + getMarginOffset(chartData),
+            to: lastIndex + getMarginOffset(chartData)
+        });
+    } catch (e) {
+        console.warn("Failed to scroll to newest actual candle:", e);
+    }
 }
 
 function normalizeCandle(candle) {
@@ -3559,8 +3960,8 @@ function subscribeChart(chartData) {
             chartData.liveSubscribed = true;
         }
         
-        // Subscribe to Hyperliquid for L2 Book (only chart 1)
-        if (state.chartCount === 1 && chartData.id === 'chart-1' && state.hlWs && state.hlWs.readyState === WebSocket.OPEN) {
+        // Subscribe to Hyperliquid for L2 Book (only active chart)
+        if (chartData.id === state.activeChartId && state.hlWs && state.hlWs.readyState === WebSocket.OPEN) {
             state.hlWs.send(JSON.stringify({
                 method: "subscribe",
                 subscription: { type: "l2Book", coin: chartData.symbol }
@@ -3930,7 +4331,7 @@ function flushChartUpdate(chartData) {
     }
     chartData.candleSeries.update(seriesUpdate);
     
-    if (isNewBar) {
+    if (isNewBar && chartData.futureWhitespaceSeries) {
         const intervalSec = getIntervalSeconds(chartData.interval);
         let lastTime;
         if (typeof candle.time === 'object' && candle.time !== null) {
@@ -3941,8 +4342,10 @@ function flushChartUpdate(chartData) {
             lastTime = Number(candle.time);
         }
         const futureTime = lastTime + 150 * intervalSec;
-        chartData.candleSeries.update({ time: futureTime });
+        const val = candle.close !== undefined ? candle.close : candle.value;
+        chartData.futureWhitespaceSeries.update({ time: futureTime, value: val });
     }
+    
     
     if (chartData.indicators.volume) {
         chartData.volumeSeries.update({
@@ -3952,14 +4355,30 @@ function flushChartUpdate(chartData) {
         });
     }
 
-    if (chartData.indicators.sma) {
-        const lastSma = calculateLatestSMA(chartData.cachedData, chartData.indicators.smaPeriod);
-        if (lastSma) chartData.smaSeries.update(lastSma);
+    if (chartData.indicators.sma1) {
+        const lastSma = calculateLatestSMA(chartData.cachedData, chartData.indicators.sma1Period);
+        if (lastSma && chartData.smaSeries1) chartData.smaSeries1.update(lastSma);
+    }
+    if (chartData.indicators.sma2) {
+        const lastSma = calculateLatestSMA(chartData.cachedData, chartData.indicators.sma2Period);
+        if (lastSma && chartData.smaSeries2) chartData.smaSeries2.update(lastSma);
+    }
+    if (chartData.indicators.sma3) {
+        const lastSma = calculateLatestSMA(chartData.cachedData, chartData.indicators.sma3Period);
+        if (lastSma && chartData.smaSeries3) chartData.smaSeries3.update(lastSma);
     }
 
-    if (chartData.indicators.ema) {
-        const lastEma = calculateLatestEMA(chartData.cachedData, chartData.indicators.emaPeriod);
-        if (lastEma) chartData.emaSeries.update(lastEma);
+    if (chartData.indicators.ema1) {
+        const lastEma = calculateLatestEMA(chartData.cachedData, chartData.indicators.ema1Period);
+        if (lastEma && chartData.emaSeries1) chartData.emaSeries1.update(lastEma);
+    }
+    if (chartData.indicators.ema2) {
+        const lastEma = calculateLatestEMA(chartData.cachedData, chartData.indicators.ema2Period);
+        if (lastEma && chartData.emaSeries2) chartData.emaSeries2.update(lastEma);
+    }
+    if (chartData.indicators.ema3) {
+        const lastEma = calculateLatestEMA(chartData.cachedData, chartData.indicators.ema3Period);
+        if (lastEma && chartData.emaSeries3) chartData.emaSeries3.update(lastEma);
     }
     
     if (chartData.indicators.bb) {
@@ -3994,7 +4413,7 @@ function flushChartUpdate(chartData) {
     }
 
     if (shouldShift) {
-        chartData.chart.timeScale().scrollToRealTime();
+        scrollToNewestActualCandle(chartData);
     }
 
     if (chartData._vLineHandlers) {
@@ -4083,22 +4502,26 @@ function updateChartLegend(chartData, indexOrParam = null) {
             if (action === 'toggle') {
                 toggleIndicatorVisibility(chartData, indType);
             } else if (action === 'settings') {
-                openSettingsModal(chartData);
-                setTimeout(() => {
-                    const tabs = document.querySelectorAll('#chart-settings-modal .sp-tab');
-                    tabs.forEach(t => {
-                        if (t.dataset.tab === indType) t.click();
-                    });
-                }, 100);
+                openSettingsModal(chartData, indType);
             } else if (action === 'delete') {
                 chartData.indicators[indType] = false;
                 if (indType === 'volume' && chartData.volumeSeries) {
                     chartData.candleSeries.priceScale().applyOptions({ autoScale: true });
                     chartData.volumeSeries.applyOptions({ visible: false });
-                } else if (indType === 'sma' && chartData.smaSeries) {
-                    chartData.smaSeries.applyOptions({ visible: false });
-                } else if (indType === 'ema' && chartData.emaSeries) {
-                    chartData.emaSeries.applyOptions({ visible: false });
+                } else if (indType === 'sma1' && chartData.smaSeries1) {
+                    chartData.smaSeries1.applyOptions({ visible: false });
+                    chartData.indicators.sma = false;
+                } else if (indType === 'sma2' && chartData.smaSeries2) {
+                    chartData.smaSeries2.applyOptions({ visible: false });
+                } else if (indType === 'sma3' && chartData.smaSeries3) {
+                    chartData.smaSeries3.applyOptions({ visible: false });
+                } else if (indType === 'ema1' && chartData.emaSeries1) {
+                    chartData.emaSeries1.applyOptions({ visible: false });
+                    chartData.indicators.ema = false;
+                } else if (indType === 'ema2' && chartData.emaSeries2) {
+                    chartData.emaSeries2.applyOptions({ visible: false });
+                } else if (indType === 'ema3' && chartData.emaSeries3) {
+                    chartData.emaSeries3.applyOptions({ visible: false });
                 } else if (indType === 'bb') {
                     if (chartData.bbUpperSeries) chartData.bbUpperSeries.applyOptions({ visible: false });
                     if (chartData.bbMiddleSeries) chartData.bbMiddleSeries.applyOptions({ visible: false });
@@ -4110,7 +4533,7 @@ function updateChartLegend(chartData, indexOrParam = null) {
                 } else if (indType === 'atr' && chartData.atrSeries) {
                     chartData.atrSeries.applyOptions({ visible: false });
                 } else if (indType === 'vpvr') {
-                    clearVolumeProfile(chartData);
+                    updateVpvrMarginAndScroll(chartData);
                 } else if (indType === 'sessions') {
                     clearSessionBands(chartData);
                 }
@@ -4119,14 +4542,18 @@ function updateChartLegend(chartData, indexOrParam = null) {
                 const select = pane ? pane.querySelector('.indicator-select') : null;
                 if (select) {
                     if (indType === 'volume') select.options[1].text = `Volume (Off)`;
-                    else if (indType === 'sma') select.options[2].text = `SMA ${chartData.indicators.smaPeriod} (Off)`;
-                    else if (indType === 'ema') select.options[3].text = `EMA ${chartData.indicators.emaPeriod} (Off)`;
-                    else if (indType === 'bb') select.options[4].text = `BB ${chartData.indicators.bbPeriod} (Off)`;
-                    else if (indType === 'rsi') select.options[5].text = `RSI ${chartData.indicators.rsiPeriod} (Off)`;
-                    else if (indType === 'vwap') select.options[6].text = `VWAP (Off)`;
-                    else if (indType === 'atr') select.options[7].text = `ATR ${chartData.indicators.atrPeriod} (Off)`;
-                    else if (indType === 'vpvr') select.options[8].text = `Vol Profile (Off)`;
-                    else if (indType === 'sessions') select.options[9].text = `Sessions (Off)`;
+                    else if (indType === 'sma1') select.options[2].text = `SMA 1 (${chartData.indicators.sma1Period}) (Off)`;
+                    else if (indType === 'sma2') select.options[3].text = `SMA 2 (${chartData.indicators.sma2Period}) (Off)`;
+                    else if (indType === 'sma3') select.options[4].text = `SMA 3 (${chartData.indicators.sma3Period}) (Off)`;
+                    else if (indType === 'ema1') select.options[5].text = `EMA 1 (${chartData.indicators.ema1Period}) (Off)`;
+                    else if (indType === 'ema2') select.options[6].text = `EMA 2 (${chartData.indicators.ema2Period}) (Off)`;
+                    else if (indType === 'ema3') select.options[7].text = `EMA 3 (${chartData.indicators.ema3Period}) (Off)`;
+                    else if (indType === 'bb') select.options[8].text = `BB ${chartData.indicators.bbPeriod} (Off)`;
+                    else if (indType === 'rsi') select.options[9].text = `RSI ${chartData.indicators.rsiPeriod} (Off)`;
+                    else if (indType === 'vwap') select.options[10].text = `VWAP (Off)`;
+                    else if (indType === 'atr') select.options[11].text = `ATR ${chartData.indicators.atrPeriod} (Off)`;
+                    else if (indType === 'vpvr') select.options[12].text = `Vol Profile (Off)`;
+                    else if (indType === 'sessions') select.options[13].text = `Sessions (Off)`;
                 }
  
                 updateSubchartMargins(chartData);
@@ -4174,16 +4601,20 @@ function updateChartLegend(chartData, indexOrParam = null) {
         timeVal = bar.time;
     }
 
-    let smaVal = null;
-    let emaVal = null;
+    let sma1Val = null, sma2Val = null, sma3Val = null;
+    let ema1Val = null, ema2Val = null, ema3Val = null;
     let bbUpper = null, bbMiddle = null, bbLower = null;
     let rsiVal = null;
     let vwapVal = null;
     let atrVal = null;
 
     if (paramHasData) {
-        if (chartData.smaSeries) { const d = seriesDataMap.get(chartData.smaSeries); smaVal = d ? (d.value !== undefined ? d.value : d) : null; }
-        if (chartData.emaSeries) { const d = seriesDataMap.get(chartData.emaSeries); emaVal = d ? (d.value !== undefined ? d.value : d) : null; }
+        if (chartData.smaSeries1) { const d = seriesDataMap.get(chartData.smaSeries1); sma1Val = d ? (d.value !== undefined ? d.value : d) : null; }
+        if (chartData.smaSeries2) { const d = seriesDataMap.get(chartData.smaSeries2); sma2Val = d ? (d.value !== undefined ? d.value : d) : null; }
+        if (chartData.smaSeries3) { const d = seriesDataMap.get(chartData.smaSeries3); sma3Val = d ? (d.value !== undefined ? d.value : d) : null; }
+        if (chartData.emaSeries1) { const d = seriesDataMap.get(chartData.emaSeries1); ema1Val = d ? (d.value !== undefined ? d.value : d) : null; }
+        if (chartData.emaSeries2) { const d = seriesDataMap.get(chartData.emaSeries2); ema2Val = d ? (d.value !== undefined ? d.value : d) : null; }
+        if (chartData.emaSeries3) { const d = seriesDataMap.get(chartData.emaSeries3); ema3Val = d ? (d.value !== undefined ? d.value : d) : null; }
         if (chartData.rsiSeries) { const d = seriesDataMap.get(chartData.rsiSeries); rsiVal = d ? (d.value !== undefined ? d.value : d) : null; }
         if (chartData.vwapSeries) { const d = seriesDataMap.get(chartData.vwapSeries); vwapVal = d ? (d.value !== undefined ? d.value : d) : null; }
         if (chartData.atrSeries) { const d = seriesDataMap.get(chartData.atrSeries); atrVal = d ? (d.value !== undefined ? d.value : d) : null; }
@@ -4193,8 +4624,12 @@ function updateChartLegend(chartData, indexOrParam = null) {
             const l = seriesDataMap.get(chartData.bbLowerSeries); bbLower = l ? (l.value !== undefined ? l.value : l) : null;
         }
     } else {
-        if (chartData.indicators.sma) smaVal = calculateLatestSMA(chartData.cachedData, chartData.indicators.smaPeriod)?.value;
-        if (chartData.indicators.ema) emaVal = calculateLatestEMA(chartData.cachedData, chartData.indicators.emaPeriod)?.value;
+        if (chartData.indicators.sma1) sma1Val = calculateLatestSMA(chartData.cachedData, chartData.indicators.sma1Period)?.value;
+        if (chartData.indicators.sma2) sma2Val = calculateLatestSMA(chartData.cachedData, chartData.indicators.sma2Period)?.value;
+        if (chartData.indicators.sma3) sma3Val = calculateLatestSMA(chartData.cachedData, chartData.indicators.sma3Period)?.value;
+        if (chartData.indicators.ema1) ema1Val = calculateLatestEMA(chartData.cachedData, chartData.indicators.ema1Period)?.value;
+        if (chartData.indicators.ema2) ema2Val = calculateLatestEMA(chartData.cachedData, chartData.indicators.ema2Period)?.value;
+        if (chartData.indicators.ema3) ema3Val = calculateLatestEMA(chartData.cachedData, chartData.indicators.ema3Period)?.value;
         if (chartData.indicators.rsi) rsiVal = calculateLatestRSI(chartData.cachedData, chartData.indicators.rsiPeriod)?.value;
         if (chartData.indicators.vwap) vwapVal = calculateLatestVWAP(chartData.cachedData, chartData.interval)?.value;
         if (chartData.indicators.atr) atrVal = calculateLatestATR(chartData.cachedData, chartData.indicators.atrPeriod)?.value;
@@ -4233,11 +4668,23 @@ function updateChartLegend(chartData, indexOrParam = null) {
     if (ind && ind.volume) {
         indRows.push({ type: 'volume', label: 'Vol', value: volume != null ? formatPrice(volume) : '—', color: '#8b9bb0', noSettings: true, visible: chartData.volumeSeries ? chartData.volumeSeries.options().visible !== false : true });
     }
-    if (ind && ind.sma) {
-        indRows.push({ type: 'sma', label: `SMA ${ind.smaPeriod}`, value: smaVal != null ? formatPrice(smaVal) : '—', color: ind.smaColor, visible: chartData.smaSeries ? chartData.smaSeries.options().visible !== false : true });
+    if (ind && ind.sma1) {
+        indRows.push({ type: 'sma1', label: `SMA 1 (${ind.sma1Period})`, value: sma1Val != null ? formatPrice(sma1Val) : '—', color: ind.sma1Color, visible: chartData.smaSeries1 ? chartData.smaSeries1.options().visible !== false : true });
     }
-    if (ind && ind.ema) {
-        indRows.push({ type: 'ema', label: `EMA ${ind.emaPeriod}`, value: emaVal != null ? formatPrice(emaVal) : '—', color: ind.emaColor, visible: chartData.emaSeries ? chartData.emaSeries.options().visible !== false : true });
+    if (ind && ind.sma2) {
+        indRows.push({ type: 'sma2', label: `SMA 2 (${ind.sma2Period})`, value: sma2Val != null ? formatPrice(sma2Val) : '—', color: ind.sma2Color, visible: chartData.smaSeries2 ? chartData.smaSeries2.options().visible !== false : true });
+    }
+    if (ind && ind.sma3) {
+        indRows.push({ type: 'sma3', label: `SMA 3 (${ind.sma3Period})`, value: sma3Val != null ? formatPrice(sma3Val) : '—', color: ind.sma3Color, visible: chartData.smaSeries3 ? chartData.smaSeries3.options().visible !== false : true });
+    }
+    if (ind && ind.ema1) {
+        indRows.push({ type: 'ema1', label: `EMA 1 (${ind.ema1Period})`, value: ema1Val != null ? formatPrice(ema1Val) : '—', color: ind.ema1Color, visible: chartData.emaSeries1 ? chartData.emaSeries1.options().visible !== false : true });
+    }
+    if (ind && ind.ema2) {
+        indRows.push({ type: 'ema2', label: `EMA 2 (${ind.ema2Period})`, value: ema2Val != null ? formatPrice(ema2Val) : '—', color: ind.ema2Color, visible: chartData.emaSeries2 ? chartData.emaSeries2.options().visible !== false : true });
+    }
+    if (ind && ind.ema3) {
+        indRows.push({ type: 'ema3', label: `EMA 3 (${ind.ema3Period})`, value: ema3Val != null ? formatPrice(ema3Val) : '—', color: ind.ema3Color, visible: chartData.emaSeries3 ? chartData.emaSeries3.options().visible !== false : true });
     }
     if (ind && ind.bb) {
         const bbStr = bbMiddle != null ? `${formatPrice(bbUpper)}, ${formatPrice(bbMiddle)}, ${formatPrice(bbLower)}` : '—';
@@ -4335,6 +4782,18 @@ function toggleIndicatorVisibility(chartData, indType) {
         const v = !chartData.volumeSeries.options().visible;
         chartData.volumeSeries.applyOptions({ visible: v });
         updateSubchartMargins(chartData);
+    } else if (indType === "sma1" && chartData.smaSeries1) {
+        chartData.smaSeries1.applyOptions({ visible: !chartData.smaSeries1.options().visible });
+    } else if (indType === "sma2" && chartData.smaSeries2) {
+        chartData.smaSeries2.applyOptions({ visible: !chartData.smaSeries2.options().visible });
+    } else if (indType === "sma3" && chartData.smaSeries3) {
+        chartData.smaSeries3.applyOptions({ visible: !chartData.smaSeries3.options().visible });
+    } else if (indType === "ema1" && chartData.emaSeries1) {
+        chartData.emaSeries1.applyOptions({ visible: !chartData.emaSeries1.options().visible });
+    } else if (indType === "ema2" && chartData.emaSeries2) {
+        chartData.emaSeries2.applyOptions({ visible: !chartData.emaSeries2.options().visible });
+    } else if (indType === "ema3" && chartData.emaSeries3) {
+        chartData.emaSeries3.applyOptions({ visible: !chartData.emaSeries3.options().visible });
     } else if (indType === "sma" && chartData.smaSeries) {
         chartData.smaSeries.applyOptions({ visible: !chartData.smaSeries.options().visible });
     } else if (indType === "ema" && chartData.emaSeries) {
@@ -4356,13 +4815,7 @@ function toggleIndicatorVisibility(chartData, indType) {
         updateSubchartMargins(chartData);
     } else if (indType === "vpvr") {
         chartData.indicators.vpvrVisible = (chartData.indicators.vpvrVisible !== false) ? false : true;
-        const canvas = _ensureVPCanvas(chartData);
-        if (canvas) canvas.style.display = chartData.indicators.vpvrVisible ? 'block' : 'none';
-        if (chartData.indicators.vpvrVisible) {
-            drawVolumeProfile(chartData);
-        } else {
-            clearVolumeProfile(chartData);
-        }
+        updateVpvrMarginAndScroll(chartData);
     } else if (indType === "sessions") {
         chartData.indicators.sessionsVisible = (chartData.indicators.sessionsVisible !== false) ? false : true;
         const canvas = _ensureSessionCanvas(chartData);
@@ -4547,15 +5000,29 @@ function setDataStatus(message) {
 }
 
 function updateTimestamp() {
-    document.getElementById("timestamp").textContent = TimeUtils.getCurrentTime();
+    const timeEl = document.getElementById("timestamp-time");
+    if (timeEl) {
+        timeEl.textContent = new Date().toLocaleTimeString("en-IN", { timeZone: TimeUtils.timeZone, hour12: true }).toLowerCase();
+    }
 }
 
 function setActiveChart(chartId) {
     if (state.activeChartId === chartId || !state.charts[chartId]) return;
 
-    if (state.activeChartId) {
-        const oldPane = document.getElementById(state.activeChartId);
+    const oldActiveId = state.activeChartId;
+    if (oldActiveId) {
+        const oldPane = document.getElementById(oldActiveId);
         if (oldPane) oldPane.classList.remove('active-chart');
+        
+        // Unsubscribe from previous L2 Book
+        const oldChartData = state.charts[oldActiveId];
+        if (oldChartData && oldChartData.l2Subscribed && state.hlWs && state.hlWs.readyState === WebSocket.OPEN) {
+            state.hlWs.send(JSON.stringify({
+                method: "unsubscribe",
+                subscription: { type: "l2Book", coin: oldChartData.symbol }
+            }));
+            oldChartData.l2Subscribed = false;
+        }
     }
 
     state.activeChartId = chartId;
@@ -4564,8 +5031,23 @@ function setActiveChart(chartId) {
 
     updateMarketMoverHighlights();
     
-    if (window.paperTrading && state.charts[chartId]) {
-        window.paperTrading.setActiveSymbol(state.charts[chartId].symbol);
+    const chartData = state.charts[chartId];
+    if (chartData && chartData.symbol !== 'none' && chartData.symbol !== 'No Chart') {
+        fetchAndRenderAssetInfo(chartData.symbol);
+        updateOrderBookHeader(chartData.symbol);
+        
+        // Subscribe to new active chart L2 Book
+        if (state.hlWs && state.hlWs.readyState === WebSocket.OPEN) {
+            state.hlWs.send(JSON.stringify({
+                method: "subscribe",
+                subscription: { type: "l2Book", coin: chartData.symbol }
+            }));
+            chartData.l2Subscribed = true;
+        }
+    }
+    
+    if (window.paperTrading && chartData) {
+        window.paperTrading.setActiveSymbol(chartData.symbol);
     }
 }
 
@@ -4602,7 +5084,7 @@ function switchChartSymbol(chartId, newSymbol) {
         resetChart(chartData);
         saveLayoutState();
         
-        if (state.chartCount === 1 && chartData.id === 'chart-1') {
+        if (state.activeChartId === chartId) {
             clearInfoPanel();
             clearOrderBook();
             updateOrderBookHeader('none');
@@ -4638,7 +5120,15 @@ function switchChartSymbol(chartId, newSymbol) {
     loadChartData(chartData);
     saveLayoutState();
 
-    if (state.chartCount === 1 && chartData.id === 'chart-1') {
+    if (newSymbol && newSymbol !== 'none' && newSymbol !== 'No Chart') {
+        if (watchlistState && watchlistState.symbolsList && !watchlistState.symbolsList.includes(newSymbol)) {
+            watchlistState.symbolsList.push(newSymbol);
+            saveWatchlistToStorage(watchlistState.symbolsList);
+            if (typeof refreshWatchlistFromCharts === 'function') refreshWatchlistFromCharts();
+        }
+    }
+
+    if (state.activeChartId === chartId) {
         clearOrderBook();
         fetchAndRenderAssetInfo(chartData.symbol);
     }
@@ -4650,7 +5140,7 @@ function switchChartSymbol(chartId, newSymbol) {
     }
 }
 
-function openSettingsModal(chartData) {
+function openSettingsModal(chartData, onlyIndicator = null) {
     let modal = document.getElementById("chart-settings-modal");
     if (!modal) {
         modal = document.createElement("div");
@@ -4659,54 +5149,63 @@ function openSettingsModal(chartData) {
         document.body.appendChild(modal);
     }
 
+    const showGroup = (groupName) => {
+        if (!onlyIndicator) return ""; // show all if null
+        if (groupName === 'sma' && onlyIndicator.startsWith('sma')) return "";
+        if (groupName === 'ema' && onlyIndicator.startsWith('ema')) return "";
+        return onlyIndicator === groupName ? "" : "display: none;";
+    };
+
+    const titleText = onlyIndicator ? `${onlyIndicator.toUpperCase().replace('1',' 1').replace('2',' 2').replace('3',' 3')} Settings` : "Chart Settings";
+
     modal.innerHTML = `
         <div class="settings-modal-content">
-            <h3>Chart Settings</h3>
-            <div class="settings-group">
-                <label>SMA Period</label>
-                <input type="number" id="sma-period-input" value="${chartData.indicators.smaPeriod}" min="1">
+            <h3>${titleText}</h3>
+            <div class="settings-group" style="${showGroup('sma')}">
+                <label>${onlyIndicator && onlyIndicator.startsWith('sma') ? onlyIndicator.toUpperCase().replace('SMA', 'SMA ') : 'SMA'} Period</label>
+                <input type="number" id="sma-period-input" value="${onlyIndicator && onlyIndicator.startsWith('sma') ? chartData.indicators[onlyIndicator + 'Period'] : chartData.indicators.smaPeriod}" min="1">
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('sma')}">
                 <label>SMA Color</label>
-                <input type="color" id="sma-color-input" value="${chartData.indicators.smaColor}">
+                <input type="color" id="sma-color-input" value="${onlyIndicator && onlyIndicator.startsWith('sma') ? chartData.indicators[onlyIndicator + 'Color'] : chartData.indicators.smaColor}">
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('sma')}">
                 <label>SMA Thickness</label>
                 <select id="sma-width-input">
-                    <option value="1" ${chartData.indicators.smaLineWidth == 1 ? 'selected' : ''}>Thin</option>
-                    <option value="2" ${chartData.indicators.smaLineWidth == 2 ? 'selected' : ''}>Medium</option>
-                    <option value="3" ${chartData.indicators.smaLineWidth == 3 ? 'selected' : ''}>Thick</option>
+                    <option value="1" ${(onlyIndicator && onlyIndicator.startsWith('sma') ? chartData.indicators[onlyIndicator + 'LineWidth'] : chartData.indicators.smaLineWidth) == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${(onlyIndicator && onlyIndicator.startsWith('sma') ? chartData.indicators[onlyIndicator + 'LineWidth'] : chartData.indicators.smaLineWidth) == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${(onlyIndicator && onlyIndicator.startsWith('sma') ? chartData.indicators[onlyIndicator + 'LineWidth'] : chartData.indicators.smaLineWidth) == 3 ? 'selected' : ''}>Thick</option>
                 </select>
             </div>
-            <div class="settings-group">
-                <label>EMA Period</label>
-                <input type="number" id="ema-period-input" value="${chartData.indicators.emaPeriod}" min="1">
+            <div class="settings-group" style="${showGroup('ema')}">
+                <label>${onlyIndicator && onlyIndicator.startsWith('ema') ? onlyIndicator.toUpperCase().replace('EMA', 'EMA ') : 'EMA'} Period</label>
+                <input type="number" id="ema-period-input" value="${onlyIndicator && onlyIndicator.startsWith('ema') ? chartData.indicators[onlyIndicator + 'Period'] : chartData.indicators.emaPeriod}" min="1">
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('ema')}">
                 <label>EMA Color</label>
-                <input type="color" id="ema-color-input" value="${chartData.indicators.emaColor}">
+                <input type="color" id="ema-color-input" value="${onlyIndicator && onlyIndicator.startsWith('ema') ? chartData.indicators[onlyIndicator + 'Color'] : chartData.indicators.emaColor}">
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('ema')}">
                 <label>EMA Thickness</label>
                 <select id="ema-width-input">
-                    <option value="1" ${chartData.indicators.emaLineWidth == 1 ? 'selected' : ''}>Thin</option>
-                    <option value="2" ${chartData.indicators.emaLineWidth == 2 ? 'selected' : ''}>Medium</option>
-                    <option value="3" ${chartData.indicators.emaLineWidth == 3 ? 'selected' : ''}>Thick</option>
+                    <option value="1" ${(onlyIndicator && onlyIndicator.startsWith('ema') ? chartData.indicators[onlyIndicator + 'LineWidth'] : chartData.indicators.emaLineWidth) == 1 ? 'selected' : ''}>Thin</option>
+                    <option value="2" ${(onlyIndicator && onlyIndicator.startsWith('ema') ? chartData.indicators[onlyIndicator + 'LineWidth'] : chartData.indicators.emaLineWidth) == 2 ? 'selected' : ''}>Medium</option>
+                    <option value="3" ${(onlyIndicator && onlyIndicator.startsWith('ema') ? chartData.indicators[onlyIndicator + 'LineWidth'] : chartData.indicators.emaLineWidth) == 3 ? 'selected' : ''}>Thick</option>
                 </select>
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('bb')}">
                 <label>BB Period</label>
                 <input type="number" id="bb-period-input" value="${chartData.indicators.bbPeriod}" min="1">
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('bb')}">
                 <label>BB Std Dev</label>
                 <input type="number" id="bb-stddev-input" value="${chartData.indicators.bbStdDev}" min="0.1" step="0.1">
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('bb')}">
                 <label>BB Color</label>
                 <input type="color" id="bb-color-input" value="${chartData.indicators.bbColor}">
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('bb')}">
                 <label>BB Thickness</label>
                 <select id="bb-width-input">
                     <option value="1" ${chartData.indicators.bbLineWidth == 1 ? 'selected' : ''}>Thin</option>
@@ -4714,15 +5213,15 @@ function openSettingsModal(chartData) {
                     <option value="3" ${chartData.indicators.bbLineWidth == 3 ? 'selected' : ''}>Thick</option>
                 </select>
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('rsi')}">
                 <label>RSI Period</label>
                 <input type="number" id="rsi-period-input" value="${chartData.indicators.rsiPeriod}" min="1">
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('rsi')}">
                 <label>RSI Color</label>
                 <input type="color" id="rsi-color-input" value="${chartData.indicators.rsiColor}">
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('rsi')}">
                 <label>RSI Thickness</label>
                 <select id="rsi-width-input">
                     <option value="1" ${chartData.indicators.rsiLineWidth == 1 ? 'selected' : ''}>Thin</option>
@@ -4730,11 +5229,11 @@ function openSettingsModal(chartData) {
                     <option value="3" ${chartData.indicators.rsiLineWidth == 3 ? 'selected' : ''}>Thick</option>
                 </select>
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('vwap')}">
                 <label>VWAP Color</label>
                 <input type="color" id="vwap-color-input" value="${chartData.indicators.vwapColor}">
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('vwap')}">
                 <label>VWAP Thickness</label>
                 <select id="vwap-width-input">
                     <option value="1" ${chartData.indicators.vwapLineWidth == 1 ? 'selected' : ''}>Thin</option>
@@ -4742,15 +5241,15 @@ function openSettingsModal(chartData) {
                     <option value="3" ${chartData.indicators.vwapLineWidth == 3 ? 'selected' : ''}>Thick</option>
                 </select>
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('atr')}">
                 <label>ATR Period</label>
                 <input type="number" id="atr-period-input" value="${chartData.indicators.atrPeriod}" min="1">
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('atr')}">
                 <label>ATR Color</label>
                 <input type="color" id="atr-color-input" value="${chartData.indicators.atrColor}">
             </div>
-            <div class="settings-group">
+            <div class="settings-group" style="${showGroup('atr')}">
                 <label>ATR Thickness</label>
                 <select id="atr-width-input">
                     <option value="1" ${chartData.indicators.atrLineWidth == 1 ? 'selected' : ''}>Thin</option>
@@ -4772,41 +5271,88 @@ function openSettingsModal(chartData) {
     };
 
     document.getElementById("settings-save-btn").onclick = () => {
-        const smaPeriod = parseInt(document.getElementById("sma-period-input").value, 10);
-        const emaPeriod = parseInt(document.getElementById("ema-period-input").value, 10);
         const bbPeriod = parseInt(document.getElementById("bb-period-input").value, 10);
         const bbStdDev = parseFloat(document.getElementById("bb-stddev-input").value);
         const rsiPeriod = parseInt(document.getElementById("rsi-period-input").value, 10);
         const atrPeriod = parseInt(document.getElementById("atr-period-input").value, 10);
         
-        if (!isNaN(smaPeriod) && smaPeriod > 0) chartData.indicators.smaPeriod = smaPeriod;
-        if (!isNaN(emaPeriod) && emaPeriod > 0) chartData.indicators.emaPeriod = emaPeriod;
         if (!isNaN(bbPeriod) && bbPeriod > 0) chartData.indicators.bbPeriod = bbPeriod;
         if (!isNaN(bbStdDev) && bbStdDev > 0) chartData.indicators.bbStdDev = bbStdDev;
         if (!isNaN(rsiPeriod) && rsiPeriod > 0) chartData.indicators.rsiPeriod = rsiPeriod;
         if (!isNaN(atrPeriod) && atrPeriod > 0) chartData.indicators.atrPeriod = atrPeriod;
         
-        chartData.indicators.smaColor = document.getElementById("sma-color-input").value;
-        chartData.indicators.emaColor = document.getElementById("ema-color-input").value;
         chartData.indicators.bbColor = document.getElementById("bb-color-input").value;
         chartData.indicators.rsiColor = document.getElementById("rsi-color-input").value;
         chartData.indicators.vwapColor = document.getElementById("vwap-color-input").value;
         chartData.indicators.atrColor = document.getElementById("atr-color-input").value;
-        chartData.indicators.smaLineWidth = parseInt(document.getElementById("sma-width-input").value, 10);
-        chartData.indicators.emaLineWidth = parseInt(document.getElementById("ema-width-input").value, 10);
         chartData.indicators.bbLineWidth = parseInt(document.getElementById("bb-width-input").value, 10);
         chartData.indicators.rsiLineWidth = parseInt(document.getElementById("rsi-width-input").value, 10);
         chartData.indicators.vwapLineWidth = parseInt(document.getElementById("vwap-width-input").value, 10);
         chartData.indicators.atrLineWidth = parseInt(document.getElementById("atr-width-input").value, 10);
 
-        if (chartData.smaSeries) {
-            chartData.smaSeries.applyOptions({ color: chartData.indicators.smaColor, lineWidth: chartData.indicators.smaLineWidth });
-            if (chartData.indicators.sma) chartData.smaSeries.setData(calculateSMA(chartData.cachedData, chartData.indicators.smaPeriod));
+        if (onlyIndicator && onlyIndicator.startsWith('sma')) {
+            const period = parseInt(document.getElementById("sma-period-input").value, 10);
+            if (!isNaN(period) && period > 0) chartData.indicators[onlyIndicator + 'Period'] = period;
+            chartData.indicators[onlyIndicator + 'Color'] = document.getElementById("sma-color-input").value;
+            chartData.indicators[onlyIndicator + 'LineWidth'] = parseInt(document.getElementById("sma-width-input").value, 10);
+            
+            // Backwards compatibility alias for sma1
+            if (onlyIndicator === 'sma1') {
+                chartData.indicators.smaPeriod = chartData.indicators.sma1Period;
+                chartData.indicators.smaColor = chartData.indicators.sma1Color;
+                chartData.indicators.smaLineWidth = chartData.indicators.sma1LineWidth;
+            }
+        } else {
+            const smaPeriod = parseInt(document.getElementById("sma-period-input").value, 10);
+            if (!isNaN(smaPeriod) && smaPeriod > 0) chartData.indicators.smaPeriod = smaPeriod;
+            chartData.indicators.smaColor = document.getElementById("sma-color-input").value;
+            chartData.indicators.smaLineWidth = parseInt(document.getElementById("sma-width-input").value, 10);
         }
-        if (chartData.emaSeries) {
-            chartData.emaSeries.applyOptions({ color: chartData.indicators.emaColor, lineWidth: chartData.indicators.emaLineWidth });
-            if (chartData.indicators.ema) chartData.emaSeries.setData(calculateEMA(chartData.cachedData, chartData.indicators.emaPeriod));
+
+        if (onlyIndicator && onlyIndicator.startsWith('ema')) {
+            const period = parseInt(document.getElementById("ema-period-input").value, 10);
+            if (!isNaN(period) && period > 0) chartData.indicators[onlyIndicator + 'Period'] = period;
+            chartData.indicators[onlyIndicator + 'Color'] = document.getElementById("ema-color-input").value;
+            chartData.indicators[onlyIndicator + 'LineWidth'] = parseInt(document.getElementById("ema-width-input").value, 10);
+            
+            // Backwards compatibility alias for ema1
+            if (onlyIndicator === 'ema1') {
+                chartData.indicators.emaPeriod = chartData.indicators.ema1Period;
+                chartData.indicators.emaColor = chartData.indicators.ema1Color;
+                chartData.indicators.emaLineWidth = chartData.indicators.ema1LineWidth;
+            }
+        } else {
+            const emaPeriod = parseInt(document.getElementById("ema-period-input").value, 10);
+            if (!isNaN(emaPeriod) && emaPeriod > 0) chartData.indicators.emaPeriod = emaPeriod;
+            chartData.indicators.emaColor = document.getElementById("ema-color-input").value;
+            chartData.indicators.emaLineWidth = parseInt(document.getElementById("ema-width-input").value, 10);
         }
+
+        if (chartData.smaSeries1) {
+            chartData.smaSeries1.applyOptions({ color: chartData.indicators.sma1Color, lineWidth: chartData.indicators.sma1LineWidth });
+            if (chartData.indicators.sma1) chartData.smaSeries1.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma1Period));
+        }
+        if (chartData.smaSeries2) {
+            chartData.smaSeries2.applyOptions({ color: chartData.indicators.sma2Color, lineWidth: chartData.indicators.sma2LineWidth });
+            if (chartData.indicators.sma2) chartData.smaSeries2.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma2Period));
+        }
+        if (chartData.smaSeries3) {
+            chartData.smaSeries3.applyOptions({ color: chartData.indicators.sma3Color, lineWidth: chartData.indicators.sma3LineWidth });
+            if (chartData.indicators.sma3) chartData.smaSeries3.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma3Period));
+        }
+        if (chartData.emaSeries1) {
+            chartData.emaSeries1.applyOptions({ color: chartData.indicators.ema1Color, lineWidth: chartData.indicators.ema1LineWidth });
+            if (chartData.indicators.ema1) chartData.emaSeries1.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema1Period));
+        }
+        if (chartData.emaSeries2) {
+            chartData.emaSeries2.applyOptions({ color: chartData.indicators.ema2Color, lineWidth: chartData.indicators.ema2LineWidth });
+            if (chartData.indicators.ema2) chartData.emaSeries2.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema2Period));
+        }
+        if (chartData.emaSeries3) {
+            chartData.emaSeries3.applyOptions({ color: chartData.indicators.ema3Color, lineWidth: chartData.indicators.ema3LineWidth });
+            if (chartData.indicators.ema3) chartData.emaSeries3.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema3Period));
+        }
+
         if (chartData.bbUpperSeries) {
             const bbOpts = { color: chartData.indicators.bbColor, lineWidth: chartData.indicators.bbLineWidth };
             chartData.bbUpperSeries.applyOptions(bbOpts);
@@ -4840,12 +5386,18 @@ function openSettingsModal(chartData) {
 
         const select = document.querySelector(`#${chartData.id} .indicator-select`);
         if (select) {
-            select.options[2].text = `SMA ${chartData.indicators.smaPeriod} (${chartData.indicators.sma ? 'On' : 'Off'})`;
-            select.options[3].text = `EMA ${chartData.indicators.emaPeriod} (${chartData.indicators.ema ? 'On' : 'Off'})`;
-            select.options[4].text = `BB ${chartData.indicators.bbPeriod} (${chartData.indicators.bb ? 'On' : 'Off'})`;
-            select.options[5].text = `RSI ${chartData.indicators.rsiPeriod} (${chartData.indicators.rsi ? 'On' : 'Off'})`;
-            select.options[6].text = `VWAP (${chartData.indicators.vwap ? 'On' : 'Off'})`;
-            select.options[7].text = `ATR ${chartData.indicators.atrPeriod} (${chartData.indicators.atr ? 'On' : 'Off'})`;
+            select.options[2].text = `SMA 1 (${chartData.indicators.sma1Period}) (${chartData.indicators.sma1 ? 'On' : 'Off'})`;
+            select.options[3].text = `SMA 2 (${chartData.indicators.sma2Period}) (${chartData.indicators.sma2 ? 'On' : 'Off'})`;
+            select.options[4].text = `SMA 3 (${chartData.indicators.sma3Period}) (${chartData.indicators.sma3 ? 'On' : 'Off'})`;
+            select.options[5].text = `EMA 1 (${chartData.indicators.ema1Period}) (${chartData.indicators.ema1 ? 'On' : 'Off'})`;
+            select.options[6].text = `EMA 2 (${chartData.indicators.ema2Period}) (${chartData.indicators.ema2 ? 'On' : 'Off'})`;
+            select.options[7].text = `EMA 3 (${chartData.indicators.ema3Period}) (${chartData.indicators.ema3 ? 'On' : 'Off'})`;
+            select.options[8].text = `BB ${chartData.indicators.bbPeriod} (${chartData.indicators.bb ? 'On' : 'Off'})`;
+            select.options[9].text = `RSI ${chartData.indicators.rsiPeriod} (${chartData.indicators.rsi ? 'On' : 'Off'})`;
+            select.options[10].text = `VWAP (${chartData.indicators.vwap ? 'On' : 'Off'})`;
+            select.options[11].text = `ATR ${chartData.indicators.atrPeriod} (${chartData.indicators.atr ? 'On' : 'Off'})`;
+            select.options[12].text = `Vol Profile (${chartData.indicators.vpvr ? 'On' : 'Off'})`;
+            select.options[13].text = `Sessions (${chartData.indicators.sessions ? 'On' : 'Off'})`;
         }
         saveLayoutState();
         modal.style.display = "none";
@@ -4861,8 +5413,6 @@ function injectThemeStyles() {
             --secondary-bg: #ffffff;
             --text-primary: #0f172a;
             --border-color: #cbd5e1;
-            background-color: var(--primary-bg);
-            color: var(--text-primary);
         }
         body.light-theme .chart-pane {
             background-color: var(--secondary-bg);
@@ -4891,23 +5441,38 @@ function injectThemeStyles() {
         .chart-message {
             pointer-events: none;
         }
-        .theme-btn {
-            background-color: #2a3f5f;
-            color: #ffffff;
-            border: 1px solid #394654;
+        .theme-btn, #chart-count {
+            background-color: transparent !important;
+            color: #d8dee8 !important;
+            border: 1px solid #394654 !important;
             padding: 4px 10px;
-            border-radius: 4px;
+            border-radius: 6px;
             cursor: pointer;
             font-size: 12px;
             font-family: inherit;
+            transition: background-color 150ms ease, border-color 150ms ease;
         }
-        .theme-btn:hover { background-color: #394654; }
-        body.light-theme .theme-btn {
-            background-color: #e2e8f0;
+        .theme-btn:hover, #chart-count:hover {
+            background-color: rgba(255, 255, 255, 0.08) !important;
+            border-color: #64748b !important;
+        }
+        .theme-btn option, #chart-count option {
+            background-color: #151b23;
+            color: #d8dee8;
+        }
+        body.light-theme .theme-btn, body.light-theme #chart-count {
+            background-color: transparent !important;
+            color: #0f172a !important;
+            border-color: #cbd5e1 !important;
+        }
+        body.light-theme .theme-btn:hover, body.light-theme #chart-count:hover {
+            background-color: rgba(15, 23, 42, 0.06) !important;
+            border-color: #94a3b8 !important;
+        }
+        body.light-theme .theme-btn option, body.light-theme #chart-count option {
+            background-color: #ffffff;
             color: #0f172a;
-            border-color: #cbd5e1;
         }
-        body.light-theme .theme-btn:hover { background-color: #cbd5e1; }
         
         .symbol-select-container {
             position: relative;
@@ -5077,13 +5642,11 @@ function injectThemeStyles() {
             overflow: hidden !important;
         }
 
-        /* Ensure grid expands into the space saved by the compacted header */
+        /* Ensure grid expands dynamically */
         .charts-grid {
-            height: calc(100vh - 105px) !important; 
-            height: calc(100vh - 118px) !important; 
+            height: 100% !important;
             min-height: 0 !important;
         }
-        /* Allow charts to shrink below their default min-height */
         .chart-pane, .chart-container {
             min-height: 0 !important;
         }
@@ -5122,28 +5685,27 @@ function injectThemeStyles() {
             background-color: #151b23;
             border-bottom: 1px solid #394654;
             font-family: inherit;
-            font-size: 12px;
             overflow: hidden;
             flex-shrink: 0;
         }
         .ticker-row {
             display: flex;
             align-items: center;
-            height: 26px;
+            height: 18px;
             border-bottom: 1px solid rgba(57, 70, 84, 0.3);
         }
         .ticker-row:last-child {
             border-bottom: none;
         }
         .ticker-label {
-            padding: 0 16px;
+            padding: 0 8px;
             font-weight: 700;
-            font-size: 11px;
+            font-size: 9px;
             letter-spacing: 0.5px;
             white-space: nowrap;
             z-index: 10;
             background-color: #151b23;
-            box-shadow: 10px 0 10px -5px #151b23;
+            box-shadow: 5px 0 5px -2px #151b23;
             display: flex;
             align-items: center;
             height: 100%;
@@ -5163,7 +5725,7 @@ function injectThemeStyles() {
         .ticker-scroll {
             display: flex;
             width: max-content;
-            animation: ticker-scroll 40s linear infinite;
+            animation: ticker-scroll 45s linear infinite;
         }
         .ticker-content {
             display: flex;
@@ -5171,11 +5733,11 @@ function injectThemeStyles() {
         .market-ticker-item {
             display: inline-flex;
             align-items: center;
-            margin-right: 24px;
-            gap: 6px;
+            margin-right: 16px;
+            gap: 4px;
             cursor: pointer;
-            padding: 2px 8px;
-            border-radius: 4px;
+            padding: 1px 4px;
+            border-radius: 3px;
             transition: background-color 0.2s ease;
             border: 1px solid transparent;
         }
@@ -5186,10 +5748,11 @@ function injectThemeStyles() {
         .market-ticker-symbol {
             font-weight: 600;
             color: #d8dee8;
+            font-size: 10.5px;
         }
         .market-ticker-percent {
             font-weight: 700;
-            font-size: 13px;
+            font-size: 10.5px;
         }
         .market-ticker-percent.up { color: #10b981; }
         .market-ticker-percent.down { color: #ef4444; }
@@ -5200,7 +5763,7 @@ function injectThemeStyles() {
         body.light-theme .market-ticker-container,
         body.light-theme .ticker-label {
             background-color: #f8fafc;
-            box-shadow: 10px 0 10px -5px #f8fafc;
+            box-shadow: 5px 0 5px -2px #f8fafc;
         }
         body.light-theme .market-ticker-container { border-color: #cbd5e1; }
         body.light-theme .ticker-row { border-bottom: 1px solid rgba(203, 213, 225, 0.5); }
@@ -5910,13 +6473,13 @@ function createMarketTicker() {
     
     tickerContainer.innerHTML = `
         <div class="ticker-row gainers-row">
-            <div class="ticker-label gainers-label">▲ TOP GAINERS</div>
+            <div class="ticker-label gainers-label">▲ GAINERS</div>
             <div class="ticker-scroll-wrapper">
                 <div class="ticker-scroll" id="ticker-gainers"></div>
             </div>
         </div>
         <div class="ticker-row losers-row">
-            <div class="ticker-label losers-label">▼ TOP LOSERS</div>
+            <div class="ticker-label losers-label">▼ LOSERS</div>
             <div class="ticker-scroll-wrapper">
                 <div class="ticker-scroll" id="ticker-losers"></div>
             </div>
@@ -5924,8 +6487,9 @@ function createMarketTicker() {
     `;
 
     const grid = document.getElementById('charts-grid');
-    if (grid && grid.parentNode) {
-        grid.parentNode.insertBefore(tickerContainer, grid);
+    const wrapper = document.querySelector('.main-charts-wrapper') || grid;
+    if (wrapper && wrapper.parentNode) {
+        wrapper.parentNode.insertBefore(tickerContainer, wrapper);
     } else {
         document.body.prepend(tickerContainer);
     }
@@ -5968,6 +6532,20 @@ async function fetchMarketMovers() {
         
         changes.sort((a, b) => b.change - a.change);
         
+        // Cache all prices and changes globally
+        state.allMarketPrices = {};
+        changes.forEach(item => {
+            if (item) {
+                state.allMarketPrices[item.symbol] = {
+                    price: item.price,
+                    change: item.change
+                };
+            }
+        });
+        if (typeof updateWatchlistFromMarketCache === 'function') {
+            updateWatchlistFromMarketCache();
+        }
+
         const topGainers = changes.slice(0, 10);
         const topLosers = changes.slice().reverse().slice(0, 10);
         
@@ -5986,15 +6564,20 @@ function updateTickerUI(containerId, data) {
     const activeSymbol = activeChart ? activeChart.symbol : null;
 
     let html = '';
+    const wlList = (watchlistState && watchlistState.symbolsList) || [];
     data.forEach(item => {
         const sign = item.change > 0 ? '+' : '';
         const colorClass = item.change >= 0 ? 'up' : 'down';
         const isActive = item.symbol === activeSymbol;
         const activeClass = isActive ? 'active-mover' : '';
+        const inWl = wlList.includes(item.symbol);
         html += `
             <div class="market-ticker-item ${activeClass}" data-symbol="${item.symbol}" title="Click to load ${item.symbol} chart">
                 <span class="market-ticker-symbol">${item.symbol}</span>
                 <span class="market-ticker-percent ${colorClass}">${sign}${item.change.toFixed(2)}%</span>
+                <button class="ticker-watchlist-btn${inWl ? ' wl-active' : ''}" title="${inWl ? 'Remove from Watchlist' : 'Add to Watchlist'}" data-symbol="${item.symbol}">
+                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                </button>
             </div>
         `;
     });
@@ -6427,8 +7010,8 @@ function clearOrderBook() {
 }
 
 function renderOrderBook(data) {
-    const slider = document.getElementById('sidebar-slider');
-    if (!slider || !slider.style.transform.includes('33.333%')) return;
+    const activeTab = document.querySelector(".global-right-sidebar .sidebar-tab.active");
+    if (!activeTab || activeTab.dataset.index !== '1') return;
 
     const bids = data.levels[0];
     const asks = data.levels[1];
@@ -6992,7 +7575,7 @@ function exitReplayMode(chartId) {
     
     if (chartData && chartData.chart) {
         updateMarkers(chartData);
-        chartData.chart.timeScale().scrollToRealTime();
+        scrollToNewestActualCandle(chartData);
     }
 }
 
@@ -7466,8 +8049,8 @@ const SESSIONS = [
     { name: 'NY',     startH: 13, endH: 22, color: 'rgba(34,  197, 94, 0.06)'  },  // soft green
 ];
 
-// Intervals where sessions make sense (15m and above)
-const SESSION_MIN_INTERVALS = ['15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d'];
+// Intervals where sessions make sense (all intraday timeframes and 1d)
+const SESSION_MIN_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d'];
 
 function _ensureSessionCanvas(chartData) {
     const container = document.getElementById(`${chartData.id}-container`);
@@ -7668,3 +8251,807 @@ function drawSessionBands(chartData) {
         }
     }
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   NEW FEATURES
+   1. Header Nav Tabs
+   2. Watchlist Panel (collapsible right-side sidebar)
+   3. Chart Right-Click Context Menu
+   ═══════════════════════════════════════════════════════════════ */
+
+
+
+function showAlertsHub() {
+    // Collect all active alerts from drawings
+    const allAlerts = [];
+    if (state && state.drawings) {
+        Object.entries(state.drawings).forEach(([symbol, lines]) => {
+            if (!Array.isArray(lines)) return;
+            lines.forEach(line => {
+                if (line.type === 'alert') {
+                    allAlerts.push({ symbol, price: line.price, id: line.id, active: line.active });
+                }
+            });
+        });
+    }
+
+    // Remove existing
+    const existing = document.getElementById('alerts-hub-modal');
+    if (existing) { existing.remove(); return; }
+
+    const modal = document.createElement('div');
+    modal.id = 'alerts-hub-modal';
+    modal.style.cssText = `
+        position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        width: 380px; max-height: 75vh;
+        background: var(--glass-bg); backdrop-filter: blur(20px) saturate(1.5);
+        border: 1px solid var(--glass-border);
+        border-radius: 14px;
+        box-shadow: var(--glass-shadow);
+        z-index: 8000;
+        display: flex; flex-direction: column;
+        font-family: inherit; color: var(--text);
+        overflow: hidden;
+        animation: alertsHubIn 180ms var(--ease-out) both;
+    `;
+
+    const header = document.createElement('div');
+    header.style.cssText = `
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--border);
+        font-size: 13px; font-weight: 700; letter-spacing: 0.04em;
+        text-transform: uppercase; color: var(--blue);
+    `;
+    header.innerHTML = `
+        <span style="display:flex;align-items:center;gap:8px">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            Price Alerts (${allAlerts.length})
+        </span>
+        <button onclick="this.closest('#alerts-hub-modal').remove()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;line-height:1;padding:0">×</button>
+    `;
+
+    const body = document.createElement('div');
+    body.style.cssText = 'flex:1; overflow-y:auto; padding:8px;';
+
+    if (allAlerts.length === 0) {
+        body.innerHTML = `
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:160px;gap:12px;color:var(--muted)">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.35"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                <p style="margin:0;font-size:13px">No active alerts</p>
+                <p style="margin:0;font-size:11px;opacity:0.6">Right-click on a chart to add an alert</p>
+            </div>`;
+    } else {
+        allAlerts.forEach(alert => {
+            const row = document.createElement('div');
+            row.style.cssText = `
+                display:flex; align-items:center; justify-content:space-between;
+                padding:9px 12px; border-radius:8px; margin-bottom:4px;
+                background: var(--panel-2); border: 1px solid var(--border);
+                font-size:12px;
+            `;
+            const priceStr = alert.price < 1 ? alert.price.toFixed(4) : alert.price.toFixed(2);
+            row.innerHTML = `
+                <div style="display:flex;flex-direction:column;gap:2px">
+                    <span style="font-weight:700;color:var(--text)">${alert.symbol}</span>
+                    <span style="color:var(--muted);font-size:11px">Alert @ ${priceStr}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:6px">
+                    <span style="font-size:10px;padding:2px 6px;border-radius:4px;background:${alert.active ? 'rgba(16,185,129,0.18)' : 'rgba(107,114,128,0.2)'};color:${alert.active ? 'var(--green)' : 'var(--muted)'}">${alert.active ? 'ACTIVE' : 'PENDING'}</span>
+                </div>
+            `;
+            body.appendChild(row);
+        });
+    }
+
+    modal.appendChild(header);
+    modal.appendChild(body);
+    document.body.appendChild(modal);
+
+    // Dismiss on click outside
+    setTimeout(() => {
+        const dismiss = (e) => {
+            if (!modal.contains(e.target)) {
+                modal.remove();
+                document.removeEventListener('mousedown', dismiss);
+            }
+        };
+        document.addEventListener('mousedown', dismiss);
+    }, 10);
+}
+
+// Update alert badge count
+function updateNotifBadge() {
+    const badge = document.getElementById('notif-badge');
+    if (!badge) return;
+    let count = 0;
+    if (state && state.drawings) {
+        Object.values(state.drawings).forEach(lines => {
+            if (Array.isArray(lines)) {
+                count += lines.filter(l => l.type === 'alert').length;
+            }
+        });
+    }
+    if (count > 0) {
+        badge.textContent = count > 9 ? '9+' : String(count);
+        badge.style.display = 'block';
+    } else {
+        badge.style.display = 'none';
+    }
+}
+
+// ── 2. Watchlist Panel ───────────────────────────────────────────
+const watchlistState = {
+    open: false,
+    symbols: {},        // symbol -> { price, change24h, el }
+    flashTimers: {},
+    symbolsList: [],    // persistent list of symbols in watchlist
+};
+
+function getCryptoIconHtml(symbol) {
+    const sym = symbol.toUpperCase();
+    let bg = 'linear-gradient(135deg, #f59e0b, #d97706)';
+    let char = sym.charAt(0);
+    
+    if (sym === 'BTC') {
+        bg = 'linear-gradient(135deg, #f7931a, #f7931a)';
+        char = '₿';
+    } else if (sym === 'ETH') {
+        bg = 'linear-gradient(135deg, #627eea, #3c3c3d)';
+        char = 'Ξ';
+    } else if (sym === 'SOL') {
+        bg = 'linear-gradient(135deg, #14f195, #9945ff)';
+        char = '◎';
+    } else if (sym === 'TURBO') {
+        bg = 'linear-gradient(135deg, #eab308, #ca8a04)';
+        char = 'T';
+    } else if (sym === 'XRP') {
+        bg = 'linear-gradient(135deg, #23292f, #00aae4)';
+        char = '✕';
+    } else if (sym === 'ADA') {
+        bg = 'linear-gradient(135deg, #0033ad, #002280)';
+        char = '₳';
+    } else if (sym === 'DOT') {
+        bg = 'linear-gradient(135deg, #e6007a, #a60058)';
+        char = '●';
+    } else if (sym === 'LINK') {
+        bg = 'linear-gradient(135deg, #2a5ada, #1a3a9a)';
+        char = '⬡';
+    } else {
+        let hash = 0;
+        for (let i = 0; i < sym.length; i++) {
+            hash = sym.charCodeAt(i) + ((hash << 5) - hash);
+        }
+        const c1 = `hsl(${hash % 360}, 65%, 50%)`;
+        const c2 = `hsl(${(hash + 120) % 360}, 65%, 40%)`;
+        bg = `linear-gradient(135deg, ${c1}, ${c2})`;
+    }
+    
+    return `<div class="wl-coin-icon" style="background: ${bg};">${char}</div>`;
+}
+
+function loadWatchlistFromStorage() {
+    let saved = localStorage.getItem('watchlist_symbols');
+    if (saved) {
+        try {
+            return JSON.parse(saved);
+        } catch(e) {}
+    }
+    // Default initial list
+    const defaults = ['BTC', 'ETH', 'SOL', 'TURBO'];
+    if (state && state.charts) {
+        Object.values(state.charts).forEach(cd => {
+            if (cd.symbol && cd.symbol !== 'none' && cd.symbol !== 'No Chart') {
+                if (!defaults.includes(cd.symbol)) defaults.push(cd.symbol);
+            }
+        });
+    }
+    return defaults;
+}
+
+function saveWatchlistToStorage(symbolsList) {
+    localStorage.setItem('watchlist_symbols', JSON.stringify(symbolsList));
+}
+
+function toggleWatchlistSymbol(symbol) {
+    if (!watchlistState || !watchlistState.symbolsList) return;
+    const idx = watchlistState.symbolsList.indexOf(symbol);
+    if (idx === -1) {
+        watchlistState.symbolsList.push(symbol);
+    } else {
+        watchlistState.symbolsList.splice(idx, 1);
+        delete watchlistState.symbols[symbol];
+    }
+    saveWatchlistToStorage(watchlistState.symbolsList);
+    refreshWatchlistFromCharts();
+    syncAllWatchlistBtns();
+}
+
+function syncAllWatchlistBtns() {
+    const list = (watchlistState && watchlistState.symbolsList) || [];
+    // Sync all eye buttons — option-watchlist-btn, pane-watchlist-btn, ticker-watchlist-btn
+    document.querySelectorAll('[data-symbol][class*="watchlist-btn"]').forEach(btn => {
+        const sym = btn.dataset.symbol;
+        if (!sym) return;
+        const inList = list.includes(sym);
+        btn.classList.toggle('wl-active', inList);
+        btn.title = inList ? 'Remove from Watchlist' : 'Add to Watchlist';
+    });
+    // Pane watchlist buttons carry the chart's current symbol via data-chart-id
+    document.querySelectorAll('.pane-watchlist-btn[data-chart-id]').forEach(btn => {
+        const chartId = btn.dataset.chartId;
+        const cd = state && state.charts && state.charts[chartId];
+        const sym = cd && cd.symbol;
+        if (!sym || sym === 'none') return;
+        const inList = list.includes(sym);
+        btn.classList.toggle('wl-active', inList);
+        btn.title = inList ? 'Remove from Watchlist' : 'Add to Watchlist';
+    });
+}
+
+function initWatchlistPanel() {
+    const panel  = document.getElementById('watchlist-panel');
+    const toggleBtn = document.getElementById('watchlist-toggle-btn');
+    const closeBtn  = document.getElementById('watchlist-close-btn');
+    const bellBtn   = document.getElementById('notif-bell-btn');
+    if (!panel || !toggleBtn) return;
+
+    // Load initial list from storage
+    watchlistState.symbolsList = loadWatchlistFromStorage();
+
+    // Restore open state
+    const savedOpen = localStorage.getItem('watchlist_open') === 'true';
+    if (savedOpen) openWatchlist();
+
+    toggleBtn.addEventListener('click', () => {
+        if (watchlistState.open) closeWatchlist();
+        else openWatchlist();
+    });
+
+    if (closeBtn) {
+        closeBtn.addEventListener('click', closeWatchlist);
+    }
+
+    if (bellBtn) {
+        bellBtn.addEventListener('click', () => {
+            showAlertsHub();
+        });
+    }
+
+    // ── Watchlist Search Dropdown ──────────────────────────────
+    const addInput    = document.getElementById('watchlist-add-input');
+    const searchDrop  = document.getElementById('wl-search-dropdown');
+    let wlHighlight   = -1;
+
+    const addSymbolToWatchlist = (symbol) => {
+        const sym = symbol.trim().toUpperCase();
+        if (!sym) return;
+        if (!watchlistState.symbolsList.includes(sym)) {
+            watchlistState.symbolsList.push(sym);
+            saveWatchlistToStorage(watchlistState.symbolsList);
+            refreshWatchlistFromCharts();
+        }
+        addInput.value = '';
+        searchDrop.innerHTML = '';
+        searchDrop.classList.remove('show');
+        wlHighlight = -1;
+    };
+
+    const renderWlOptions = (filter) => {
+        if (!state.instruments || state.instruments.length === 0) return;
+        const q = filter.toLowerCase();
+        const results = state.instruments.filter(item =>
+            item.symbol.toLowerCase().includes(q) ||
+            (item.name && item.name.toLowerCase().includes(q))
+        ).slice(0, 40);
+
+        if (results.length === 0) {
+            searchDrop.innerHTML = `<div class="wl-search-no-results">No matches for "${filter}"</div>`;
+        } else {
+            searchDrop.innerHTML = results.map(item => `
+                <div class="wl-search-option" data-symbol="${item.symbol}">
+                    <span class="wl-search-option-symbol">${item.symbol}</span>
+                    <span class="wl-search-option-name">${item.name || 'USDT Perp'}</span>
+                    <button class="wl-search-option-add" data-symbol="${item.symbol}" tabindex="-1">+ Add</button>
+                </div>
+            `).join('');
+        }
+        wlHighlight = -1;
+
+        // Option click
+        searchDrop.querySelectorAll('.wl-search-option').forEach(opt => {
+            opt.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                const sym = opt.dataset.symbol;
+                if (sym) addSymbolToWatchlist(sym);
+            });
+        });
+        // Add button click
+        searchDrop.querySelectorAll('.wl-search-option-add').forEach(btn => {
+            btn.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                const sym = btn.dataset.symbol;
+                if (sym) addSymbolToWatchlist(sym);
+            });
+        });
+    };
+
+    if (addInput) {
+        addInput.addEventListener('input', () => {
+            const q = addInput.value.trim();
+            if (q.length > 0) {
+                renderWlOptions(q);
+                searchDrop.classList.add('show');
+            } else {
+                searchDrop.innerHTML = '';
+                searchDrop.classList.remove('show');
+                wlHighlight = -1;
+            }
+        });
+
+        addInput.addEventListener('focus', () => {
+            if (addInput.value.trim().length > 0) {
+                searchDrop.classList.add('show');
+            }
+        });
+
+        addInput.addEventListener('blur', () => {
+            setTimeout(() => {
+                searchDrop.classList.remove('show');
+            }, 150);
+        });
+
+        addInput.addEventListener('keydown', (e) => {
+            const opts = searchDrop.querySelectorAll('.wl-search-option');
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                wlHighlight = Math.min(wlHighlight + 1, opts.length - 1);
+                opts.forEach((o, i) => o.classList.toggle('highlighted', i === wlHighlight));
+                if (opts[wlHighlight]) opts[wlHighlight].scrollIntoView({ block: 'nearest' });
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                wlHighlight = Math.max(wlHighlight - 1, 0);
+                opts.forEach((o, i) => o.classList.toggle('highlighted', i === wlHighlight));
+                if (opts[wlHighlight]) opts[wlHighlight].scrollIntoView({ block: 'nearest' });
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                if (wlHighlight >= 0 && opts[wlHighlight]) {
+                    addSymbolToWatchlist(opts[wlHighlight].dataset.symbol);
+                } else if (addInput.value.trim()) {
+                    addSymbolToWatchlist(addInput.value);
+                }
+            } else if (e.key === 'Escape') {
+                searchDrop.classList.remove('show');
+                addInput.blur();
+            }
+        });
+    }
+
+    // Populate watchlist from charts after a brief delay (charts may still be initializing)
+    setTimeout(refreshWatchlistFromCharts, 1500);
+}
+
+function openWatchlist() {
+    const panel = document.getElementById('watchlist-panel');
+    const btn   = document.getElementById('watchlist-toggle-btn');
+    if (!panel || !btn) return;
+
+    panel.classList.add('open');
+    btn.classList.add('active');
+    watchlistState.open = true;
+    localStorage.setItem('watchlist_open', 'true');
+}
+
+function closeWatchlist() {
+    const panel = document.getElementById('watchlist-panel');
+    const btn   = document.getElementById('watchlist-toggle-btn');
+    if (!panel || !btn) return;
+
+    panel.classList.remove('open');
+    btn.classList.remove('active');
+    watchlistState.open = false;
+    localStorage.setItem('watchlist_open', 'false');
+}
+
+function updateWatchlistFromMarketCache() {
+    if (!state.allMarketPrices || !watchlistState || !watchlistState.symbols) return;
+    
+    Object.keys(watchlistState.symbols).forEach(symbol => {
+        const entry = watchlistState.symbols[symbol];
+        if (!entry || !entry.el) return;
+        
+        const cached = state.allMarketPrices[symbol];
+        if (cached) {
+            const prevPrice = entry.price;
+            entry.price = cached.price;
+            entry.change24h = cached.change;
+            
+            updateWatchlistRowPrice(symbol, cached.price, prevPrice, true);
+            
+            const el = entry.el;
+            const chEl = el.querySelector('.wl-change');
+            if (chEl) {
+                const sign = cached.change >= 0 ? '+' : '';
+                chEl.textContent = `${sign}${cached.change.toFixed(2)}%`;
+                chEl.className = `wl-change ${cached.change >= 0 ? 'up' : 'down'}`;
+            }
+        }
+    });
+}
+
+function refreshWatchlistFromCharts() {
+    if (!state || !state.charts) return;
+
+    const body = document.getElementById('watchlist-body');
+    if (!body) return;
+    body.innerHTML = '';
+
+    const symbols = watchlistState.symbolsList;
+    if (!symbols || symbols.length === 0) {
+        body.innerHTML = `
+            <div class="watchlist-empty">
+                <p>Watchlist is empty</p>
+            </div>
+        `;
+        return;
+    }
+
+    symbols.forEach(symbol => {
+        const row = createWatchlistRow(symbol);
+        body.appendChild(row);
+        watchlistState.symbols[symbol] = watchlistState.symbols[symbol] || { price: null, change24h: null };
+        watchlistState.symbols[symbol].el = row;
+    });
+
+    // Seed initial prices / change from cache or active chart states
+    symbols.forEach(symbol => {
+        const entry = watchlistState.symbols[symbol];
+        
+        if (state.allMarketPrices && state.allMarketPrices[symbol]) {
+            const cached = state.allMarketPrices[symbol];
+            entry.price = cached.price;
+            entry.change24h = cached.change;
+            updateWatchlistRowPrice(symbol, cached.price, null, false);
+            
+            const el = entry.el;
+            if (el) {
+                const chEl = el.querySelector('.wl-change');
+                if (chEl) {
+                    const sign = cached.change >= 0 ? '+' : '';
+                    chEl.textContent = `${sign}${cached.change.toFixed(2)}%`;
+                    chEl.className = `wl-change ${cached.change >= 0 ? 'up' : 'down'}`;
+                }
+            }
+        } else {
+            const matchingChart = Object.values(state.charts).find(cd => cd.symbol === symbol);
+            if (matchingChart) {
+                if (matchingChart.lastPrice !== null && matchingChart.lastPrice !== undefined) {
+                    entry.price = matchingChart.lastPrice;
+                    updateWatchlistRowPrice(symbol, matchingChart.lastPrice, null, false);
+                }
+                if (matchingChart.cachedData && matchingChart.cachedData.length > 0) {
+                    const opens = matchingChart.cachedData.find(c => {
+                        const now = matchingChart.cachedData[matchingChart.cachedData.length - 1].time;
+                        return Math.abs(c.time - (now - 86400)) < 3600;
+                    });
+                    if (opens && matchingChart.lastPrice) {
+                        const change = ((matchingChart.lastPrice - opens.close) / opens.close) * 100;
+                        entry.change24h = change;
+                        const el = entry.el;
+                        if (el) {
+                            const chEl = el.querySelector('.wl-change');
+                            if (chEl) {
+                                const sign = change >= 0 ? '+' : '';
+                                chEl.textContent = `${sign}${change.toFixed(2)}%`;
+                                chEl.className = `wl-change ${change >= 0 ? 'up' : 'down'}`;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    });
+}
+
+function createWatchlistRow(symbol) {
+    const row = document.createElement('div');
+    row.className = 'watchlist-row';
+    row.dataset.symbol = symbol;
+    row.setAttribute('title', `Load ${symbol}`);
+
+    row.innerHTML = `
+        <div class="wl-left">
+            ${getCryptoIconHtml(symbol)}
+            <div class="wl-symbol-details">
+                <span class="wl-symbol">${symbol}</span>
+                <span class="wl-name">USDT Perp</span>
+            </div>
+        </div>
+        <div class="wl-right">
+            <span class="wl-price" id="wl-price-${symbol}">—</span>
+            <span class="wl-change" id="wl-change-${symbol}">—</span>
+            <button class="wl-remove-btn" title="Remove from Watchlist">&times;</button>
+        </div>
+    `;
+
+    row.addEventListener('click', () => {
+        const activeId = state && state.activeChartId;
+        if (activeId) {
+            switchChartSymbol(activeId, symbol);
+        } else if (state && state.charts) {
+            // Fall back to the first chart
+            const firstId = Object.keys(state.charts)[0];
+            if (firstId) switchChartSymbol(firstId, symbol);
+        }
+
+        // Highlight active row
+        document.querySelectorAll('.watchlist-row').forEach(r => r.classList.remove('active-wl'));
+        row.classList.add('active-wl');
+    });
+
+    const removeBtn = row.querySelector('.wl-remove-btn');
+    if (removeBtn) {
+        removeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            watchlistState.symbolsList = watchlistState.symbolsList.filter(s => s !== symbol);
+            saveWatchlistToStorage(watchlistState.symbolsList);
+            delete watchlistState.symbols[symbol];
+            refreshWatchlistFromCharts();
+        });
+    }
+
+    return row;
+}
+
+// Called from applyPriceUpdate to keep watchlist live
+function updateWatchlistRowPrice(symbol, price, prevPrice = null, doFlash = true) {
+    const entry = watchlistState.symbols[symbol];
+    if (!entry || !entry.el) return;
+
+    const priceEl = entry.el.querySelector('.wl-price');
+    if (!priceEl) return;
+
+    const fmt = price < 1 ? price.toFixed(4) : price < 1000 ? price.toFixed(2) : price.toFixed(0);
+    priceEl.textContent = fmt;
+
+    if (doFlash && prevPrice !== null) {
+        const dir = price >= prevPrice ? 'up' : 'down';
+        priceEl.classList.remove('flash-up', 'flash-down');
+        void priceEl.offsetWidth; // reflow to restart animation
+        priceEl.classList.add(`flash-${dir}`);
+    }
+}
+
+// Hook into the existing applyPriceUpdate to feed the watchlist
+const _origApplyPriceUpdate = window.applyPriceUpdate;
+// We monkey-patch after the file loads via a deferred approach
+function _patchApplyPriceUpdate() {
+    // applyPriceUpdate is defined in the outer scope, not on window
+    // Instead we hook into the flushChartUpdate path via the state
+    // Simpler: poll chart prices every 500ms for watchlist
+    setInterval(() => {
+        if (!state || !state.charts) return;
+        Object.values(state.charts).forEach(cd => {
+            if (!cd.symbol || !watchlistState.symbols[cd.symbol]) return;
+            const entry = watchlistState.symbols[cd.symbol];
+            const newPrice = cd.lastPrice;
+            if (newPrice !== null && newPrice !== undefined && newPrice !== entry.price) {
+                const prev = entry.price;
+                entry.price = newPrice;
+                updateWatchlistRowPrice(cd.symbol, newPrice, prev, true);
+            }
+        });
+        // Also update badge
+        updateNotifBadge();
+    }, 500);
+}
+
+// ── 3. Chart Right-Click Context Menu ────────────────────────────
+const ctxMenu = {
+    el: null,
+    chartData: null,
+    price: null,
+    visible: false,
+};
+
+function initContextMenu() {
+    ctxMenu.el = document.getElementById('chart-context-menu');
+    if (!ctxMenu.el) return;
+
+    // Wire buttons
+    document.getElementById('ctx-add-alert').addEventListener('click', () => {
+        hideCtxMenu();
+        if (ctxMenu.chartData && ctxMenu.price !== null) {
+            if (typeof openPriceAlertModal === 'function') {
+                openPriceAlertModal(ctxMenu.chartData, ctxMenu.price);
+            }
+        }
+    });
+
+    document.getElementById('ctx-draw-hline').addEventListener('click', () => {
+        hideCtxMenu();
+        if (ctxMenu.chartData && ctxMenu.price !== null) {
+            addHLineFromCtxMenu(ctxMenu.chartData, ctxMenu.price);
+        }
+    });
+
+    document.getElementById('ctx-copy-price').addEventListener('click', () => {
+        hideCtxMenu();
+        if (ctxMenu.price !== null) {
+            const str = ctxMenu.price < 1 ? ctxMenu.price.toFixed(4) : ctxMenu.price.toFixed(2);
+            navigator.clipboard.writeText(str).catch(() => {});
+        }
+    });
+
+    document.getElementById('ctx-copy-symbol').addEventListener('click', () => {
+        hideCtxMenu();
+        if (ctxMenu.chartData) {
+            navigator.clipboard.writeText(ctxMenu.chartData.symbol).catch(() => {});
+        }
+    });
+
+    // Dismiss on outside click
+    document.addEventListener('mousedown', (e) => {
+        if (ctxMenu.visible && ctxMenu.el && !ctxMenu.el.contains(e.target)) {
+            hideCtxMenu();
+        }
+    });
+
+    // Dismiss on scroll
+    document.addEventListener('scroll', hideCtxMenu, true);
+
+    // Dismiss on Escape
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && ctxMenu.visible) hideCtxMenu();
+    });
+}
+
+function showCtxMenu(x, y, chartData, price) {
+    if (!ctxMenu.el) return;
+
+    ctxMenu.chartData = chartData;
+    ctxMenu.price = price;
+
+    // Update header
+    const header = document.getElementById('ctx-menu-header');
+    if (header) {
+        const sym = chartData ? chartData.symbol : '—';
+        const priceStr = price !== null ? (price < 1 ? price.toFixed(4) : price.toFixed(2)) : '—';
+        header.textContent = `${sym}  ·  ${priceStr}`;
+    }
+
+    // Position — keep within viewport
+    ctxMenu.el.style.display = 'flex';
+    ctxMenu.el.style.opacity = '0';
+    ctxMenu.el.style.transform = 'scale(0.95) translateY(-4px)';
+    ctxMenu.el.style.pointerEvents = 'none';
+
+    const rect = ctxMenu.el.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const mx = Math.min(x, vw - rect.width - 8);
+    const my = Math.min(y, vh - rect.height - 8);
+
+    ctxMenu.el.style.left = `${mx}px`;
+    ctxMenu.el.style.top  = `${my}px`;
+    ctxMenu.el.style.transformOrigin = 'top left';
+
+    // Animate in via rAF
+    requestAnimationFrame(() => {
+        ctxMenu.el.classList.add('visible');
+        ctxMenu.visible = true;
+    });
+}
+
+function hideCtxMenu() {
+    if (!ctxMenu.el) return;
+    ctxMenu.el.classList.remove('visible');
+    ctxMenu.visible = false;
+
+    // After transition, set display:none
+    setTimeout(() => {
+        if (!ctxMenu.visible && ctxMenu.el) {
+            ctxMenu.el.style.display = 'none';
+        }
+    }, 150);
+}
+
+// Add a horizontal line from context menu
+function addHLineFromCtxMenu(chartData, price) {
+    if (!chartData || price === null || !chartData.candleSeries) return;
+
+    const key = chartData.symbol;
+    if (!state) return;
+    if (!state.drawings[key]) state.drawings[key] = [];
+
+    const id = Date.now().toString() + Math.random().toString().slice(2, 6);
+    const isLight = state.theme === 'light';
+    const color = isLight ? '#3b82f6' : '#60a5fa';
+    const lineObj = {
+        type: 'horizontalLine',
+        symbol: chartData.symbol,
+        price: price,
+        id: id,
+        color: color,
+        lineWidth: 1,
+        lineStyle: 2, // dashed
+    };
+    state.drawings[key].push(lineObj);
+
+    // Render on all charts showing this symbol
+    Object.values(state.charts).forEach(cd => {
+        if (cd.symbol === chartData.symbol && cd.candleSeries) {
+            if (!cd.renderedDrawings) cd.renderedDrawings = {};
+            try {
+                const pl = cd.candleSeries.createPriceLine({
+                    price: lineObj.price,
+                    color: lineObj.color,
+                    lineWidth: lineObj.lineWidth,
+                    lineStyle: lineObj.lineStyle,
+                    axisLabelVisible: true,
+                    title: '',
+                });
+                cd.renderedDrawings[id] = pl;
+            } catch(e) {
+                console.warn('Could not create price line:', e);
+            }
+        }
+    });
+
+    if (typeof saveDrawings === 'function') saveDrawings();
+}
+
+// Attach contextmenu listener to each chart container — called from initializeChart
+function attachChartContextMenu(chartData) {
+    const container = document.getElementById(`${chartData.id}-container`);
+    if (!container) return;
+
+    container.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        if (!chartData.candleSeries) return;
+
+        const rect = container.getBoundingClientRect();
+        const y = e.clientY - rect.top;
+        const price = chartData.candleSeries.coordinateToPrice(y);
+
+        showCtxMenu(e.clientX, e.clientY, chartData, price);
+    });
+}
+
+// ── Bootstrap all new features once DOM is ready ────────────────
+function initNewFeatures() {
+    initWatchlistPanel();
+    initContextMenu();
+    _patchApplyPriceUpdate();
+
+    // Watch for charts being added/changed to refresh watchlist
+    let wlRefreshTimer = null;
+    const scheduleWLRefresh = () => {
+        clearTimeout(wlRefreshTimer);
+        wlRefreshTimer = setTimeout(refreshWatchlistFromCharts, 1200);
+    };
+
+    // Re-hook whenever charts change (layout switch, symbol change)
+    if (state) {
+        const origSaveLayout = typeof saveLayoutState === 'function' ? saveLayoutState : null;
+        if (origSaveLayout) {
+            // Observe layout saves (symbol changes, grid changes)
+            const _orig = window.saveLayoutState;
+        }
+    }
+
+    // Periodic watchlist refresh (new symbols after layout change)
+    setInterval(scheduleWLRefresh, 8000);
+}
+
+// Wait for the full app to initialize before bootstrapping new features
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => setTimeout(initNewFeatures, 800));
+} else {
+    setTimeout(initNewFeatures, 800);
+}
+
+// Expose attachChartContextMenu globally so initializeChart can call it
+window.attachChartContextMenu = attachChartContextMenu;
+
