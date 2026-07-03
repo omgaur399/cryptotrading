@@ -1,25 +1,6 @@
 // drawing-primitives.js
 // Custom Drawing Tools using Lightweight Charts v4 Primitive API
 
-function intervalToSeconds(interval) {
-    if (!interval) return 60;
-    const str = String(interval).toLowerCase();
-    const numericMatch = str.match(/\d+/);
-    const numeric = numericMatch ? parseInt(numericMatch[0], 10) : 1;
-    const unit = str.replace(/\d+/g, "").trim();
-    
-    switch (unit) {
-        case "s": return numeric;
-        case "h": return numeric * 3600;
-        case "d": return numeric * 86400;
-        case "w": return numeric * 604800;
-        case "mo": return numeric * 2592000;
-        case "m":
-        default: return numeric * 60;
-    }
-}
-
-
 function safePriceToCoordinate(series, price) {
     if (!series) return null;
     try {

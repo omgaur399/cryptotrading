@@ -882,8 +882,7 @@ async function loadInstruments() {
     
     try {
         // Fetch the full active coin universe directly from Binance
-        const res = await fetch("https://api.binance.com/api/v3/exchangeInfo");
-        const data = await res.json();
+        const data = await ApiService.getExchangeInfo();
         cryptoPairs = data.symbols
             .filter(coin => coin.quoteAsset === 'USDT' && coin.status === 'TRADING')
             .map(coin => coin.baseAsset);
@@ -3588,8 +3587,7 @@ async function loadOlderHistoricalData(chartData) {
     const beforeTimestamp = oldestCandle.time;
     
     try {
-        const response = await fetch(`${CONFIG.API_BASE}/history?symbol=${chartData.symbol}&timeframe=${chartData.interval}&before_timestamp=${beforeTimestamp}&limit=1000`);
-        const payload = await response.json();
+        const { response, payload } = await ApiService.getHistory(chartData.symbol, chartData.interval, 1000, beforeTimestamp);
         
         if (!response.ok || !payload.candles || payload.candles.length === 0) {
             chartData.hasReachedBeginning = true;
@@ -3666,8 +3664,7 @@ async function loadChartData(chartData) {
         setDataStatus(`Loading ${chartData.symbol} ${chartData.interval}`);
         chartData.isFetchingHistory = true;
         
-        const response = await fetch(`${CONFIG.API_BASE}/history?symbol=${chartData.symbol}&timeframe=${chartData.interval}&limit=1000`);
-        const payload = await response.json();
+        const { response, payload } = await ApiService.getHistory(chartData.symbol, chartData.interval, 1000);
         if (!response.ok || !payload.candles || payload.candles.length === 0) {
             throw new Error(payload.error || "No candles available");
         }
@@ -3899,14 +3896,11 @@ function subscribeChart(chartData) {
         chartData.liveSubscribed = true;
     } else if (chartData.source !== "hyperliquid") {
         chartData.liveSubscribed = true;
-        fetch(`${CONFIG.API_BASE}/live/subscribe`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ source: chartData.source, symbol: chartData.symbol }),
-        }).catch(error => {
-            chartData.liveSubscribed = false;
-            console.warn("Live subscribe failed", error);
-        });
+        ApiService.subscribeLive({ source: chartData.source, symbol: chartData.symbol })
+            .catch(error => {
+                chartData.liveSubscribed = false;
+                console.warn("Live subscribe failed", error);
+            });
     }
 }
 
@@ -6379,14 +6373,7 @@ async function fetchMarketMovers() {
     if (document.hidden) return; // Save resources when tab is inactive
 
     try {
-        const res = await fetch("https://api.hyperliquid.xyz/info", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ type: "metaAndAssetCtxs" })
-        });
-        if (!res.ok) throw new Error("Market data fetch failed");
-        
-        const data = await res.json();
+        const data = await ApiService.getHyperliquidFunding();
         if (!Array.isArray(data) || data.length < 2) return;
         
         const meta = data[0];
@@ -6501,9 +6488,7 @@ async function fetchAndRenderAssetInfo(symbol, forceRefresh = false) {
             if (COMMON_IDS[upperClean]) {
                 coinId = COMMON_IDS[upperClean];
             } else {
-                const searchRes = await fetch(`https://api.coingecko.com/api/v3/search?query=${cleanSymbol}`);
-                if (!searchRes.ok) throw new Error('Search failed');
-                const searchData = await searchRes.json();
+                const searchData = await ApiService.searchCoinGecko(cleanSymbol);
                 
                 if (searchData.coins && searchData.coins.length > 0) {
                     const exactMatches = searchData.coins.filter(c => c.symbol.toLowerCase() === cleanSymbol.toLowerCase());
@@ -6519,9 +6504,7 @@ async function fetchAndRenderAssetInfo(symbol, forceRefresh = false) {
             }
 
             // 2. Fetch the detailed market data
-            const res = await fetch(`https://api.coingecko.com/api/v3/coins/${coinId}?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false`);
-            if (!res.ok) throw new Error('Details failed');
-            const data = await res.json();
+            const data = await ApiService.getCoinGeckoInfo(coinId);
             
             const md = data.market_data || {};
             
@@ -6562,27 +6545,7 @@ async function fetchAndRenderAssetInfo(symbol, forceRefresh = false) {
                 if (cleanSymbol.startsWith('1000')) cleanSymbol = cleanSymbol.replace(/^1000/, '');
                 if (cleanSymbol === 'MATIC') cleanSymbol = 'POL';
                 
-                const endpoints = [
-                    `https://api.binance.com/api/v3/ticker/24hr?symbol=${cleanSymbol}USDT`,
-                    `https://data-api.binance.vision/api/v3/ticker/24hr?symbol=${cleanSymbol}USDT`,
-                    `https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=${cleanSymbol}USDT`,
-                    `https://fapi.binance.com/fapi/v1/ticker/24hr?symbol=1000${cleanSymbol}USDT`,
-                    `https://api.mexc.com/api/v3/ticker/24hr?symbol=${cleanSymbol}USDT`,
-                    `https://api.mexc.com/api/v3/ticker/24hr?symbol=1000${cleanSymbol}USDT`
-                ];
-
-                let bData = null;
-                let is1000x = false;
-                for (const url of endpoints) {
-                    try {
-                        const binanceRes = await fetch(url);
-                        if (binanceRes.ok) { 
-                            bData = await binanceRes.json(); 
-                            if (url.includes('symbol=1000')) is1000x = true;
-                            break; 
-                        }
-                    } catch (err) { /* Ignore ISP blocks/CORS errors and try next */ }
-                }
+                const { data: bData, is1000x } = await ApiService.get24hTicker(cleanSymbol);
                 
                 if (!bData) throw new Error('All fallbacks failed');
 
@@ -7578,21 +7541,15 @@ function openBacktestModal() {
                 parameters = {};
             }
 
-            const response = await fetch(`${CONFIG.API_BASE}/backtest`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    strategy: strategy,
-                    symbol: document.getElementById('backtest-symbol').value,
-                    interval: document.getElementById('backtest-interval').value,
-                    startTime: new Date(document.getElementById('backtest-start-date').value).getTime() / 1000,
-                    endTime: new Date(document.getElementById('backtest-end-date').value).getTime() / 1000,
-                    parameters: parameters
-                })
-            });
-
-            const result = await response.json();
-            if (!response.ok || result.error) throw new Error(result.error || 'Backtest failed');
+            const payload = {
+                strategy: strategy,
+                symbol: document.getElementById('backtest-symbol').value,
+                interval: document.getElementById('backtest-interval').value,
+                startTime: new Date(document.getElementById('backtest-start-date').value).getTime() / 1000,
+                endTime: new Date(document.getElementById('backtest-end-date').value).getTime() / 1000,
+                parameters: parameters
+            };
+            const result = await ApiService.runBacktest(payload);
 
             state.backtest = { 
                 ...result, 
