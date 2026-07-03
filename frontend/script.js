@@ -1,14 +1,3 @@
-const CONFIG = {
-    API_BASE: (window.location.protocol === 'file:' || ((window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1') && window.location.port !== '5000')) ? "http://127.0.0.1:5000/api" : "/api",
-    STORAGE_KEY: "trading-dashboard-chart-count",
-    LAYOUT_STORAGE_KEY: "trading-dashboard-layout",
-    THEME_STORAGE_KEY: "trading-dashboard-theme",
-    DRAWINGS_STORAGE_KEY: "trading-dashboard-drawings",
-    BACKTEST_STORAGE_KEY: "trading-dashboard-backtest",
-    DEFAULT_CHART_COUNT: 4,
-    ALLOWED_COUNTS: [1, 2, 4, 6, 8],
-};
-
 
 function savePrimitiveDrawing(symbol, prim) {
     if (!state.drawings[symbol]) state.drawings[symbol] = [];
@@ -480,49 +469,8 @@ class DrawingManager {
 }
 window.drawingManager = new DrawingManager();
 
-const COMMON_IDS = {
-    "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana", "BNB": "binancecoin", "XRP": "ripple",
-    "DOGE": "dogecoin", "ADA": "cardano", "AVAX": "avalanche-2", "LINK": "chainlink", "DOT": "polkadot",
-    "POL": "polygon-ecosystem-token", "TON": "the-open-network", "SHIB": "shiba-inu", "LTC": "litecoin",
-    "TRX": "tron", "NEAR": "near", "APT": "aptos", "ARB": "arbitrum", "OP": "optimism", "SUI": "sui",
-    "INJ": "injective-protocol", "TIA": "celestia", "RNDR": "render-token", "SEI": "sei-network",
-    "DYDX": "dydx", "FIL": "filecoin", "KAS": "kaspa", "STX": "blockstack", "LDO": "lido-dao",
-    "FET": "fetch-ai", "RUNE": "thorchain", "WLD": "worldcoin-wld", "IMX": "immutable-x",
-    "PEPE": "pepe", "WIF": "dogwifcoin", "JUP": "jupiter-exchange-solana", "PYTH": "pyth-network",
-    "BONK": "bonk", "ORDI": "ordi", "BCH": "bitcoin-cash", "ETC": "ethereum-classic", "XMR": "monero",
-    "XLM": "stellar", "HBAR": "hedera-hashgraph", "VET": "vechain", "ALGO": "algorand", "GRT": "the-graph",
-    "EGLD": "elrond-erd-2", "AAVE": "aave", "SNX": "havven", "THETA": "theta-token", "EOS": "eos",
-    "XTZ": "tezos", "MANA": "decentraland", "SAND": "the-sandbox", "AXS": "axie-infinity",
-    "GALA": "gala", "CRV": "curve-dao-token", "MKR": "maker", "STRK": "starknet", "ENA": "ethena",
-    "MEW": "cat-in-a-dogs-world", "POPCAT": "popcat", "SLERF": "slerf", "PENGU": "penguiana",
-    "OM": "mantra-dao", "TAO": "bittensor", "AR": "arweave", "TRB": "tellor", "SATS": "sats",
-    "RATS": "rats", "ZIG": "zignaly", "MYRO": "myro", "NFP": "nfprompt", "ALT": "altlayer",
-    "AI": "sleepless-ai", "XAI": "xai", "MANTA": "manta-network", "MEME": "memecoin",
-    "ACE": "fusionist", "NTRN": "neutron", "BIGTIME": "big-time", "BLUR": "blur",
-    "SUPER": "superfarm", "ILV": "illuvium", "BEAM": "beam-2", "MAGIC": "magic",
-    "GMX": "gmx", "COMP": "compound-governance-token", "1INCH": "1inch", "YFI": "yearn-finance",
-    "SUSHI": "sushi", "UNI": "uniswap", "CAKE": "pancakeswap-token", "SSV": "ssv-network",
-    "EDU": "open-campus", "ID": "space-id", "HOOK": "hooked-protocol", "LQTY": "liquity",
-    "FXS": "frax", "GNS": "gains-network", "PENDLE": "pendle", "RDNT": "radiant-capital",
-    "GTC": "gitcoin", "BAND": "band-protocol", "CYBER": "cyberconnect", "ARKM": "arkham",
-    "PORTAL": "portal", "PIXEL": "pixels", "MAVIA": "heroes-of-mavia", "GMT": "stepn",
-    "LUNA": "terra-luna-2", "DASH": "dash", "ZEC": "zcash", "IOTA": "iota", "NEO": "neo",
-    "CHZ": "chiliz", "BAT": "basic-attention-token", "ENJ": "enjincoin", "ZIL": "zilliqa",
-    "KAVA": "kava", "RVN": "ravencoin", "WAVES": "waves", "ONT": "ontology", "ICX": "icon",
-    "QTUM": "qtum", "NANO": "nano", "OMG": "omg", "ZRX": "0x", "CELO": "celo", "BAL": "balancer",
-    "HYPE": "hyperliquid", "ZETA": "zetachain", "ONDO": "ondo-finance", "AERO": "aerodrome-finance",
-    "JTO": "jito-governance-token", "ETHFI": "ether-fi", "BOME": "book-of-meme"
-};
-
-function getAssetName(sym) {
-    if (COMMON_IDS[sym]) {
-        return COMMON_IDS[sym].split('-').map(w => w === '2' ? '' : w.charAt(0).toUpperCase() + w.slice(1)).join(' ').trim();
-    }
-    return sym;
-}
-
 const TimeUtils = {
-    timeZone: localStorage.getItem("trading-dashboard-tz") || Intl.DateTimeFormat().resolvedOptions().timeZone,
+    timeZone: StorageService.getTimeZone(null) || Intl.DateTimeFormat().resolvedOptions().timeZone,
 
     _getMs: (time) => {
         // Lightweight Charts may pass a BusinessDay object for 1d+ timeframes or Unix timestamps (seconds)
@@ -607,11 +555,11 @@ async function initializeApp() {
     favicon.href = 'data:,';
     document.head.appendChild(favicon);
 
-    state.theme = localStorage.getItem(CONFIG.THEME_STORAGE_KEY) || "dark";
+    state.theme = StorageService.getTheme() || "dark";
     if (state.theme === "light") document.body.classList.add("light-theme");
     injectThemeStyles();
 
-    const savedDrawings = localStorage.getItem(CONFIG.DRAWINGS_STORAGE_KEY);
+    const savedDrawings = StorageService.getDrawings();
     if (savedDrawings) {
         try {
             state.drawings = JSON.parse(savedDrawings);
@@ -620,7 +568,7 @@ async function initializeApp() {
         }
     }
 
-    const savedBacktest = localStorage.getItem(CONFIG.BACKTEST_STORAGE_KEY);
+    const savedBacktest = StorageService.getBacktest();
     if (savedBacktest) {
         try {
             state.backtest = JSON.parse(savedBacktest);
@@ -669,7 +617,7 @@ async function initializeApp() {
             tzSelect.addEventListener("change", (e) => {
                 TimeUtils.timeZone = e.target.value;
                 if (tzDisplay) tzDisplay.textContent = tzSelect.options[tzSelect.selectedIndex].text;
-                localStorage.setItem("trading-dashboard-tz", e.target.value);
+                StorageService.saveTimeZone(e.target.value);
                 Object.values(state.charts).forEach(chartData => {
                     if (chartData.chart) chartData.chart.applyOptions({ localization: { timeFormatter: TimeUtils.formatTooltip } });
                 });
@@ -701,11 +649,11 @@ async function initializeApp() {
         resetGridBtn.onclick = () => {
             // Clear saved sizes for the current chart count
             try {
-                const raw = localStorage.getItem(GRID_SIZES_KEY);
+                const raw = StorageService.getGridSizes();
                 if (raw) {
                     const all = JSON.parse(raw);
                     delete all[state.chartCount];
-                    localStorage.setItem(GRID_SIZES_KEY, JSON.stringify(all));
+                    StorageService.saveGridSizes(all);
                 }
             } catch(e) {}
             // Re-render grid without saved sizes (CSS defaults kick in)
@@ -774,7 +722,7 @@ async function initializeApp() {
     
     if (sidebarToggleBtn && globalSidebar) {
         // Load persistent collapse state (default to active/not collapsed)
-        const isCollapsed = localStorage.getItem("trading-sidebar-collapsed") === "true";
+        const isCollapsed = StorageService.getSidebarCollapsed();
         const arrowEl = sidebarToggleBtn.querySelector(".sidebar-toggle-arrow");
         if (isCollapsed) {
             globalSidebar.classList.add("collapsed");
@@ -802,7 +750,7 @@ async function initializeApp() {
                     }
                 }
             }
-            localStorage.setItem("trading-sidebar-collapsed", String(willCollapse));
+            StorageService.saveSidebarCollapsed(willCollapse);
             
             // Trigger resize on all charts to adapt to new width
             setTimeout(() => {
@@ -842,7 +790,7 @@ async function initializeApp() {
 
     // Chart Sync Toggle Setup
     const syncChartsBtn = document.getElementById("sync-charts-btn");
-    state.syncCharts = localStorage.getItem("trading-sync-charts") === "true";
+    state.syncCharts = StorageService.getSyncCharts();
     if (syncChartsBtn) {
         if (state.syncCharts) {
             syncChartsBtn.classList.add("active");
@@ -865,7 +813,7 @@ async function initializeApp() {
             } else {
                 syncChartsBtn.classList.remove("active");
             }
-            localStorage.setItem("trading-sync-charts", String(state.syncCharts));
+            StorageService.saveSyncCharts(state.syncCharts);
         });
     }
 
@@ -908,17 +856,12 @@ function syncTimeScales(sourceChartId, logicalRange) {
 }
 
 function readSavedChartCount() {
-    const saved = Number(localStorage.getItem(CONFIG.STORAGE_KEY));
+    const saved = StorageService.getChartCount(0);
     return CONFIG.ALLOWED_COUNTS.includes(saved) ? saved : CONFIG.DEFAULT_CHART_COUNT;
 }
 
 function getSavedLayoutState() {
-    try {
-        const saved = localStorage.getItem(CONFIG.LAYOUT_STORAGE_KEY);
-        return saved ? JSON.parse(saved) : {};
-    } catch (e) {
-        return {};
-    }
+    return StorageService.getLayout() || {};
 }
 
 function saveLayoutState() {
@@ -931,7 +874,7 @@ function saveLayoutState() {
             indicators: chartData.indicators
         };
     });
-    localStorage.setItem(CONFIG.LAYOUT_STORAGE_KEY, JSON.stringify(layout));
+    StorageService.saveLayout(layout);
 }
 
 async function loadInstruments() {
@@ -1080,7 +1023,7 @@ function connectLiveStream() {
 function setChartCount(count) {
     const safeCount = CONFIG.ALLOWED_COUNTS.includes(count) ? count : CONFIG.DEFAULT_CHART_COUNT;
     state.chartCount = safeCount;
-    localStorage.setItem(CONFIG.STORAGE_KEY, String(safeCount));
+    StorageService.saveChartCount(safeCount);
     renderGrid();
     // Hide sync button in single-chart mode
     if (window._updateSyncBtnVisibility) window._updateSyncBtnVisibility();
@@ -1273,12 +1216,9 @@ function renderGrid() {
     setActiveChart('chart-1');
 }
 
-// ── Grid Resize Handles ──────────────────────────────────────────────────────
-const GRID_SIZES_KEY = 'tdc-grid-sizes';
-
 function getSavedGridSizes(count) {
     try {
-        const raw = localStorage.getItem(GRID_SIZES_KEY);
+        const raw = StorageService.getGridSizes();
         if (!raw) return null;
         const all = JSON.parse(raw);
         return all[count] || null;
@@ -1287,10 +1227,10 @@ function getSavedGridSizes(count) {
 
 function saveGridSizes(count, cols, rows) {
     try {
-        const raw = localStorage.getItem(GRID_SIZES_KEY);
+        const raw = StorageService.getGridSizes();
         const all = raw ? JSON.parse(raw) : {};
         all[count] = { cols, rows };
-        localStorage.setItem(GRID_SIZES_KEY, JSON.stringify(all));
+        StorageService.saveGridSizes(all);
     } catch(e) {}
 }
 
@@ -2934,7 +2874,7 @@ function resetChart(chartData) {
 }
 
 function saveDrawings() {
-    localStorage.setItem(CONFIG.DRAWINGS_STORAGE_KEY, JSON.stringify(state.drawings));
+    StorageService.saveDrawings(state.drawings);
 }
 
 function addHorizontalLine(chartData, price) {
@@ -3933,18 +3873,6 @@ function scrollToNewestActualCandle(chartData) {
     }
 }
 
-function normalizeCandle(candle) {
-    const normalized = {
-        time: Number(candle.time),
-        open: Number(candle.open),
-        high: Number(candle.high),
-        low: Number(candle.low),
-        close: Number(candle.close),
-        volume: Number(candle.volume || 0),
-    };
-    return Object.values(normalized).every(Number.isFinite) ? normalized : null;
-}
-
 function subscribeChart(chartData) {
     if (chartData.liveSubscribed || chartData.symbol === "No Chart" || chartData.symbol === "none") return;
     
@@ -4054,11 +3982,6 @@ function applyPriceUpdate(chartData, tick) {
         chartData.pendingUpdate = true;
         requestAnimationFrame(() => flushChartUpdate(chartData));
     }
-}
-
-function getIntervalSeconds(interval) {
-    const map = { "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400, "1wk": 604800, "1mo": 2592000 };
-    return map[interval] || 60;
 }
 
 function handleCrosshairSync(sourceChartData, param) {
@@ -4466,18 +4389,6 @@ function buildRealtimeCandle(chartData, time, price, volume) {
     return current;
 }
 
-function bucketTime(time, interval) {
-    const seconds = {
-        "1m": 60,
-        "5m": 300,
-        "15m": 900,
-        "1h": 3600,
-        "4h": 14400,
-        "1d": 86400,
-    }[interval] || 60;
-    return Math.floor(time / seconds) * seconds;
-}
-
 const eyeSvg   = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
 const eyeOffSvg = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
 const gearSvg  = `<svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>`;
@@ -4864,17 +4775,6 @@ function flashTicker(chartId, direction) {
     }, 10);
 }
 
-function formatPrice(price) {
-    if (price === null || price === undefined) return "--";
-    const absPrice = Math.abs(price);
-    if (absPrice >= 1000) return price.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-    if (absPrice >= 1) return price.toFixed(2);
-    if (absPrice >= 0.01) return price.toFixed(4);
-    if (absPrice >= 0.00001) return price.toFixed(6);
-    if (absPrice >= 0.0000001) return price.toFixed(8);
-    return price.toPrecision(4);
-}
-
 function setPaneMessage(chartId, message) {
     const container = document.getElementById(`${chartId}-container`);
     let messageEl = container.querySelector(".chart-message");
@@ -4946,26 +4846,6 @@ function updateChartCountdown(chartData, now = Date.now()) {
     timerEl.classList.remove('up', 'down');
     timerEl.classList.add(chartData.lastDirection);
     timerEl.classList.add("show");
-}
-
-function getCountdownMs(interval, now) {
-    const secondsMap = { "1m": 60, "3m": 180, "5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400 };
-    const seconds = secondsMap[interval];
-    if (!seconds) return null; // Skip complex intervals like 1wk, 1mo
-
-    const ms = seconds * 1000;
-    const next = Math.ceil(now / ms) * ms;
-    return next === now ? ms : next - now;
-}
-
-function formatCountdown(ms) {
-    const totalSeconds = Math.floor(ms / 1000);
-    const h = Math.floor(totalSeconds / 3600);
-    const m = Math.floor((totalSeconds % 3600) / 60);
-    const s = totalSeconds % 60;
-    
-    const minSec = `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
-    return h > 0 ? `${h.toString().padStart(2, "0")}:${minSec}` : minSec;
 }
 
 function updateConnectionStatus() {
@@ -6317,7 +6197,7 @@ function injectThemeStyles() {
 
 function toggleTheme() {
     state.theme = state.theme === "dark" ? "light" : "dark";
-    localStorage.setItem(CONFIG.THEME_STORAGE_KEY, state.theme);
+    StorageService.saveTheme(state.theme);
     
     const isLight = state.theme === "light";
     document.body.classList.toggle("light-theme", isLight);
@@ -6436,12 +6316,12 @@ function createInfoPanel() {
             tab.classList.add('active');
             const index = parseInt(tab.getAttribute('data-index'));
             slider.style.transform = `translateX(-${index * 33.333}%)`;
-            localStorage.setItem('trading-dashboard-active-tab', index);
+            StorageService.saveActiveTab(index);
             state.obCentered = false;
         });
     });
 
-    const savedTab = localStorage.getItem('trading-dashboard-active-tab') || '0';
+    const savedTab = StorageService.getActiveTab() || '0';
     const targetTab = tabs[parseInt(savedTab)];
     if (targetTab) {
         targetTab.click();
@@ -6775,38 +6655,6 @@ function getEmptyAssetInfo(symbol) {
         image: null,
         isPartial: true
     };
-}
-
-function formatCurrency(num) {
-    if (typeof num !== 'number' || isNaN(num)) return '-';
-    if (num >= 1e9) return '$' + (num / 1e9).toFixed(2) + 'B';
-    if (num >= 1e6) return '$' + (num / 1e6).toFixed(2) + 'M';
-    if (num >= 1e3) return '$' + (num / 1e3).toFixed(2) + 'K';
-    const absNum = Math.abs(num);
-    if (absNum >= 1) return '$' + num.toFixed(2);
-    if (absNum >= 0.01) return '$' + num.toFixed(4);
-    if (absNum >= 0.00001) return '$' + num.toFixed(6);
-    if (absNum >= 0.0000001) return '$' + num.toFixed(8);
-    return '$' + num.toPrecision(4);
-}
-
-function formatNumber(num) {
-    if (typeof num !== 'number' || isNaN(num)) return '-';
-    if (num >= 1e9) return (num / 1e9).toFixed(2) + 'B';
-    if (num >= 1e6) return (num / 1e6).toFixed(2) + 'M';
-    if (num >= 1e3) return (num / 1e3).toFixed(2) + 'K';
-    return num.toLocaleString(undefined, { maximumFractionDigits: 0 });
-}
-
-function formatPercent(num) {
-    if (typeof num !== 'number' || isNaN(num)) return '-';
-    const sign = num > 0 ? '+' : '';
-    return sign + num.toFixed(2) + '%';
-}
-
-function getPerfClass(num) {
-    if (typeof num !== 'number' || isNaN(num)) return '';
-    return num >= 0 ? 'perf-up' : 'perf-down';
 }
 
 function renderAssetInfo(info) {
@@ -7751,7 +7599,7 @@ function openBacktestModal() {
                 symbol: document.getElementById('backtest-symbol').value,
                 interval: document.getElementById('backtest-interval').value
             };
-            localStorage.setItem(CONFIG.BACKTEST_STORAGE_KEY, JSON.stringify(state.backtest));
+            StorageService.saveBacktest(state.backtest);
             
             const chartData = state.charts[state.activeChartId];
             if (chartData) {
@@ -7852,12 +7700,6 @@ function renderBacktestResults(chartData, results) {
 //  VOLUME PROFILE (VPVR)  —  Canvas overlay, TradingView style
 // ═══════════════════════════════════════════════════════════════════════════
 
-const VP_BUCKETS    = 100;   // number of price rows
-const VP_WIDTH_PCT  = 0.12;  // fraction of chart width used by bars
-const VP_OPACITY    = 0.82;  // overall overlay opacity
-const VP_BUY_COLOR  = 'rgba(16, 185, 129, 0.55)';   // green bars
-const VP_SELL_COLOR = 'rgba(220, 38, 38, 0.55)';    // red bars
-const VP_POC_COLOR  = '#facc15';                     // yellow POC line
 
 function _ensureVPCanvas(chartData) {
     const container = document.getElementById(`${chartData.id}-container`);
@@ -8043,14 +7885,6 @@ function drawVolumeProfile(chartData) {
 //  Asia: 00:00–09:00 UTC  |  London: 07:00–16:00 UTC  |  NY: 13:00–22:00 UTC
 // ═══════════════════════════════════════════════════════════════════════════
 
-const SESSIONS = [
-    { name: 'Asia',   startH:  0, endH:  9, color: 'rgba(167, 139, 250, 0.06)' },  // soft violet
-    { name: 'London', startH:  7, endH: 16, color: 'rgba(56,  189, 248, 0.06)' },  // soft sky
-    { name: 'NY',     startH: 13, endH: 22, color: 'rgba(34,  197, 94, 0.06)'  },  // soft green
-];
-
-// Intervals where sessions make sense (all intraday timeframes and 1d)
-const SESSION_MIN_INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '6h', '8h', '12h', '1d'];
 
 function _ensureSessionCanvas(chartData) {
     const container = document.getElementById(`${chartData.id}-container`);
@@ -8431,7 +8265,7 @@ function getCryptoIconHtml(symbol) {
 }
 
 function loadWatchlistFromStorage() {
-    let saved = localStorage.getItem('watchlist_symbols');
+    let saved = StorageService.getWatchlistSymbols();
     if (saved) {
         try {
             return JSON.parse(saved);
@@ -8450,7 +8284,7 @@ function loadWatchlistFromStorage() {
 }
 
 function saveWatchlistToStorage(symbolsList) {
-    localStorage.setItem('watchlist_symbols', JSON.stringify(symbolsList));
+    StorageService.saveWatchlistSymbols(symbolsList);
 }
 
 function toggleWatchlistSymbol(symbol) {
@@ -8500,7 +8334,7 @@ function initWatchlistPanel() {
     watchlistState.symbolsList = loadWatchlistFromStorage();
 
     // Restore open state
-    const savedOpen = localStorage.getItem('watchlist_open') === 'true';
+    const savedOpen = StorageService.getWatchlistOpen();
     if (savedOpen) openWatchlist();
 
     toggleBtn.addEventListener('click', () => {
@@ -8640,7 +8474,7 @@ function openWatchlist() {
     panel.classList.add('open');
     btn.classList.add('active');
     watchlistState.open = true;
-    localStorage.setItem('watchlist_open', 'true');
+    StorageService.saveWatchlistOpen(true);
 }
 
 function closeWatchlist() {
@@ -8651,7 +8485,7 @@ function closeWatchlist() {
     panel.classList.remove('open');
     btn.classList.remove('active');
     watchlistState.open = false;
-    localStorage.setItem('watchlist_open', 'false');
+    StorageService.saveWatchlistOpen(false);
 }
 
 function updateWatchlistFromMarketCache() {

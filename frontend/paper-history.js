@@ -1,6 +1,6 @@
 window.PaperHistory = class PaperHistory {
     constructor() {
-        this.trades = JSON.parse(localStorage.getItem('pt_history') || '[]');
+        this.trades = StorageService.getPaperTradingHistory();
         // Ensure all trades have journal properties initialized
         this.trades.forEach(t => {
             if (!t.tags) t.tags = [];
@@ -10,7 +10,7 @@ window.PaperHistory = class PaperHistory {
     }
     
     save() {
-        localStorage.setItem('pt_history', JSON.stringify(this.trades));
+        StorageService.savePaperTradingHistory(this.trades);
     }
     
     addTrade(trade) {

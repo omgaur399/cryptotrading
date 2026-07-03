@@ -1,12 +1,12 @@
 window.PaperPositions = class PaperPositions {
     constructor() {
-        this.positions = JSON.parse(localStorage.getItem('pt_positions') || '[]');
-        this.orders = JSON.parse(localStorage.getItem('pt_orders') || '[]');
+        this.positions = StorageService.getPaperTradingPositions();
+        this.orders = StorageService.getPaperTradingOrders();
     }
 
     save() {
-        localStorage.setItem('pt_positions', JSON.stringify(this.positions));
-        localStorage.setItem('pt_orders', JSON.stringify(this.orders));
+        StorageService.savePaperTradingPositions(this.positions);
+        StorageService.savePaperTradingOrders(this.orders);
     }
 
     openPosition(symbol, direction, price, qty, tp, sl, time) {

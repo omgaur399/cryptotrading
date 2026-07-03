@@ -1038,7 +1038,7 @@ window.PaperTrading = class PaperTrading {
         if (typeof state !== 'undefined' && state.backtest) {
             state.backtest = null;
             if (typeof CONFIG !== 'undefined' && CONFIG.BACKTEST_STORAGE_KEY) {
-                localStorage.removeItem(CONFIG.BACKTEST_STORAGE_KEY);
+                StorageService.clearBacktest();
             }
             Object.values(state.charts).forEach(chartData => {
                 chartData.backtestMarkers = [];

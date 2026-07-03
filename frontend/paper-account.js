@@ -6,12 +6,12 @@ window.PaperAccount = class PaperAccount {
     }
     
     load() {
-        const saved = localStorage.getItem('pt_balance');
+        const saved = StorageService.getPaperTradingBalance();
         if (saved !== null) this.balance = parseFloat(saved);
     }
     
     save() {
-        localStorage.setItem('pt_balance', this.balance.toFixed(4));
+        StorageService.savePaperTradingBalance(this.balance);
     }
     
     addPnL(amount) {
