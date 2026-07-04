@@ -664,8 +664,8 @@ select:focus  {
     color: var(--muted);
     text-align: center;
     /* Subtle frosted overlay */
-    background: hsla(220, 14%, 6%, 0.65);
-    backdrop-filter: blur(4px);
+    background: hsla(220, 14%, 6%, 0.3);
+    backdrop-filter: blur(1px);
     font-size: 13px;
     border-radius: 0 0 10px 10px;
 }
