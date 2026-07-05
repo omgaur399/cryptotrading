@@ -240,7 +240,7 @@ const DrawingService = {
                 const dh = prim.getDeleteHandle();
                 if (dh) {
                     const dx = dh.x - px, dy = dh.y - py;
-                    if (dx * dx + dy * dy <= 20 * 20) {
+                    if (dx * dx + dy * dy <= 22 * 22) {
                         return { primitive: prim, handleName: 'delete', chartData };
                     }
                 }

@@ -176,6 +176,16 @@ class DrawingManager {
 
         let dragging = null;
 
+        const projectPointOnSegment = (px, py, x1, y1, x2, y2) => {
+            const dx = x2 - x1;
+            const dy = y2 - y1;
+            const lenSq = dx * dx + dy * dy;
+            if (lenSq === 0) return { x: x1, y: y1 };
+            let t = ((px - x1) * dx + (py - y1) * dy) / lenSq;
+            t = Math.max(0, Math.min(1, t));
+            return { x: x1 + t * dx, y: y1 + t * dy };
+        };
+
         const onMouseMove = (e) => {
             if (dragging || (window.drawingManager && window.drawingManager.activeTool)) return;
             const rect = container.getBoundingClientRect();
@@ -191,11 +201,39 @@ class DrawingManager {
                 if (h && h.primitive === prim) {
                     if (!prim.isHovered) {
                         prim.isHovered = true;
-                        prim._hoverX = px;
-                        prim._hoverY = py;
                         if (prim._unhoverTimeout) { clearTimeout(prim._unhoverTimeout); prim._unhoverTimeout = null; }
-                        prim.updateAllViews();
                     }
+                    
+                    const coords = prim._getCoords ? prim._getCoords() : null;
+                    if (coords && coords.x1 !== undefined && coords.x2 !== undefined) {
+                        const proj = projectPointOnSegment(px, py, coords.x1, coords.y1, coords.x2, coords.y2);
+                        const dist = Math.sqrt((px - proj.x) * (px - proj.x) + (py - proj.y) * (py - proj.y));
+                        if (dist <= 15) {
+                            let movedDist = 999;
+                            if (prim._hoverX !== undefined && prim._hoverY !== undefined) {
+                                const dx = proj.x - prim._hoverX;
+                                const dy = proj.y - prim._hoverY;
+                                movedDist = Math.sqrt(dx * dx + dy * dy);
+                            }
+                            if (prim._hoverX === undefined || prim._hoverY === undefined || movedDist > 50) {
+                                prim._hoverX = proj.x;
+                                prim._hoverY = proj.y;
+                            }
+                        }
+                    } else {
+                        let movedDist = 999;
+                        if (prim._hoverX !== undefined && prim._hoverY !== undefined) {
+                            const dx = px - prim._hoverX;
+                            const dy = py - prim._hoverY;
+                            movedDist = Math.sqrt(dx * dx + dy * dy);
+                        }
+                        if (prim._hoverX === undefined || prim._hoverY === undefined || movedDist > 50) {
+                            prim._hoverX = px;
+                            prim._hoverY = py;
+                        }
+                    }
+                    
+                    prim.updateAllViews();
                     foundHover = true;
                 } else if (prim.isHovered) {
                     prim.isHovered = false;
@@ -1016,7 +1054,9 @@ function renderGrid() {
         };
 
         state.charts[chartId] = chartData;
-        grid.appendChild(createChartPane(chartData, index));
+        const pane = LayoutService.createChartPane(chartData, index);
+        pane.addEventListener('click', () => setActiveChart(chartData.id));
+        grid.appendChild(pane);
         initializeChart(chartData);
         populatePaneControls(chartData);
         loadChartData(chartData);
@@ -1035,7 +1075,14 @@ function renderGrid() {
         grid.style.gridTemplateColumns = savedSizes.cols;
         grid.style.gridTemplateRows    = savedSizes.rows;
     }
-    if (state.chartCount > 1) initGridResizeHandles(grid, state.chartCount);
+    if (state.chartCount > 1) {
+        LayoutService.initGridResizeHandles(grid, state.chartCount, (cols, rows) => {
+            saveGridSizes(state.chartCount, cols, rows);
+            Object.values(state.charts).forEach(cd => {
+                if (cd.chart) try { cd.chart.applyOptions({}); } catch(err) {}
+            });
+        });
+    }
 
     setActiveChart('chart-1');
 }
@@ -1058,243 +1105,12 @@ function saveGridSizes(count, cols, rows) {
     } catch(e) {}
 }
 
-function initGridResizeHandles(grid, chartCount) {
-    // Remove stale handles from a previous render
-    grid.querySelectorAll('.grid-resize-handle').forEach(h => h.remove());
-
-    const colMap = { 2: 1, 4: 2, 6: 3, 8: 4 };
-    const rowMap = { 2: 1, 4: 2, 6: 2, 8: 2 };
-    const numCols = colMap[chartCount] || 1;
-    const numRows = rowMap[chartCount] || 1;
-
-    if (numCols < 2 && numRows < 2) return; // Nothing to drag
-
-    // Make the grid position:relative so absolutely-positioned handles align properly
-    grid.style.position = 'relative';
-
-    // Vertical handles (between columns)
-    for (let c = 1; c < numCols; c++) {
-        const handle = document.createElement('div');
-        handle.className = 'grid-resize-handle grid-resize-v';
-        handle.dataset.col = c;
-        handle.title = 'Drag to resize columns';
-        grid.appendChild(handle);
-
-        handle.addEventListener('pointerdown', (e) => {
-            e.preventDefault();
-            handle.setPointerCapture(e.pointerId);
-            handle.classList.add('dragging');
-
-            const gridRect = grid.getBoundingClientRect();
-            const startX = e.clientX;
-            const computedCols = getComputedStyle(grid).gridTemplateColumns.split(' ').map(parseFloat);
-            const totalFrs = computedCols.reduce((a,b)=>a+b, 0);
-            const pxPerFr = totalFrs > 0 ? gridRect.width / totalFrs : 1;
-
-            const onMove = (ev) => {
-                const dx = ev.clientX - startX;
-                const dFr = dx / pxPerFr;
-                const newCols = [...computedCols];
-                const minFr = 0.15;
-                newCols[c-1] = Math.max(minFr, computedCols[c-1] + dFr);
-                newCols[c]   = Math.max(minFr, computedCols[c]   - dFr);
-                grid.style.gridTemplateColumns = newCols.map(v => v + 'fr').join(' ');
-                positionGridHandles(grid, numCols, numRows);
-            };
-
-            const onUp = () => {
-                handle.classList.remove('dragging');
-                handle.releasePointerCapture(e.pointerId);
-                handle.removeEventListener('pointermove', onMove);
-                handle.removeEventListener('pointerup', onUp);
-                saveGridSizes(chartCount, grid.style.gridTemplateColumns, grid.style.gridTemplateRows);
-                Object.values(state.charts).forEach(cd => {
-                    if (cd.chart) try { cd.chart.applyOptions({}); } catch(err) {}
-                });
-            };
-
-            handle.addEventListener('pointermove', onMove);
-            handle.addEventListener('pointerup', onUp);
-        });
-    }
-
-    // Horizontal handles (between rows)
-    for (let r = 1; r < numRows; r++) {
-        const handle = document.createElement('div');
-        handle.className = 'grid-resize-handle grid-resize-h';
-        handle.dataset.row = r;
-        handle.title = 'Drag to resize rows';
-        grid.appendChild(handle);
-
-        handle.addEventListener('pointerdown', (e) => {
-            e.preventDefault();
-            handle.setPointerCapture(e.pointerId);
-            handle.classList.add('dragging');
-
-            const gridRect = grid.getBoundingClientRect();
-            const startY = e.clientY;
-            const computedRows = getComputedStyle(grid).gridTemplateRows.split(' ').map(parseFloat);
-            const totalFrs = computedRows.reduce((a,b)=>a+b, 0);
-            const pxPerFr = totalFrs > 0 ? gridRect.height / totalFrs : 1;
-
-            const onMove = (ev) => {
-                const dy = ev.clientY - startY;
-                const dFr = dy / pxPerFr;
-                const newRows = [...computedRows];
-                const minFr = 0.15;
-                newRows[r-1] = Math.max(minFr, computedRows[r-1] + dFr);
-                newRows[r]   = Math.max(minFr, computedRows[r]   - dFr);
-                grid.style.gridTemplateRows = newRows.map(v => v + 'fr').join(' ');
-                positionGridHandles(grid, numCols, numRows);
-            };
-
-            const onUp = () => {
-                handle.classList.remove('dragging');
-                handle.releasePointerCapture(e.pointerId);
-                handle.removeEventListener('pointermove', onMove);
-                handle.removeEventListener('pointerup', onUp);
-                saveGridSizes(chartCount, grid.style.gridTemplateColumns, grid.style.gridTemplateRows);
-                Object.values(state.charts).forEach(cd => {
-                    if (cd.chart) try { cd.chart.applyOptions({}); } catch(err) {}
-                });
-            };
-
-            handle.addEventListener('pointermove', onMove);
-            handle.addEventListener('pointerup', onUp);
-        });
-    }
-
-    // Disconnect old observer to prevent memory leaks
-    if (grid._resizeObserver) grid._resizeObserver.disconnect();
-
-    // Position handles after browser lays out the grid
-    requestAnimationFrame(() => positionGridHandles(grid, numCols, numRows));
-
-    // Observer tracks chart panes to keep handles aligned when window resizes
-    grid._resizeObserver = new ResizeObserver(() => positionGridHandles(grid, numCols, numRows));
-    grid.querySelectorAll('.chart-pane').forEach(pane => grid._resizeObserver.observe(pane));
-}
-
-function positionGridHandles(grid, numCols, numRows) {
-    const gridRect = grid.getBoundingClientRect();
-    const children = Array.from(grid.querySelectorAll('.chart-pane'));
-    if (children.length === 0) return;
-
-    // Vertical handles — position at right edge of each column group
-    for (let c = 1; c < numCols; c++) {
-        const handle = grid.querySelector('.grid-resize-v[data-col="' + c + '"]');
-        if (!handle) continue;
-        const idx = c - 1; // rightmost pane of column c-1
-        const pane = children[idx];
-        if (!pane) continue;
-        const pRect = pane.getBoundingClientRect();
-        const right = pRect.right - gridRect.left;
-        handle.style.cssText = [
-            'position:absolute',
-            'top:0',
-            'height:100%',
-            'width:10px',
-            'left:' + (right - 5) + 'px',
-            'z-index:50'
-        ].join(';');
-    }
-
-    // Horizontal handles — position at bottom edge of each row group
-    for (let r = 1; r < numRows; r++) {
-        const handle = grid.querySelector('.grid-resize-h[data-row="' + r + '"]');
-        if (!handle) continue;
-        const idx = (r * numCols) - 1; // last pane of row r-1
-        const pane = children[idx];
-        if (!pane) continue;
-        const pRect = pane.getBoundingClientRect();
-        const bottom = pRect.bottom - gridRect.top;
-        handle.style.cssText = [
-            'position:absolute',
-            'left:0',
-            'width:100%',
-            'height:10px',
-            'top:' + (bottom - 5) + 'px',
-            'z-index:50'
-        ].join(';');
-    }
-}
 
 
-function createChartPane(chartData, index) {
-    const pane = document.createElement("section");
-    pane.className = "chart-pane";
-    pane.id = chartData.id;
-    pane.addEventListener('click', () => setActiveChart(chartData.id));
 
-    const volText = chartData.indicators.volume ? "On" : "Off";
-    const sma1Text = chartData.indicators.sma1 ? "On" : "Off";
-    const sma2Text = chartData.indicators.sma2 ? "On" : "Off";
-    const sma3Text = chartData.indicators.sma3 ? "On" : "Off";
-    const ema1Text = chartData.indicators.ema1 ? "On" : "Off";
-    const ema2Text = chartData.indicators.ema2 ? "On" : "Off";
-    const ema3Text = chartData.indicators.ema3 ? "On" : "Off";
-    const bbText = chartData.indicators.bb ? "On" : "Off";
-    const rsiText = chartData.indicators.rsi ? "On" : "Off";
-    const vwapText = chartData.indicators.vwap ? "On" : "Off";
-    const atrText = chartData.indicators.atr ? "On" : "Off";
 
-    pane.innerHTML = `
-        <div class="pane-header" id="${chartData.id}-ticker">
-            <div class="pane-ticker">
-                <span class="ticker-symbol">Pane ${index}</span>
-                <button class="pane-watchlist-btn" title="Add to Watchlist" data-chart-id="${chartData.id}">
-                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                </button>
-                <span class="ticker-price">--</span>
-                <span class="ticker-change">--</span>
-            </div>
-            <div class="pane-controls">
-                <div class="symbol-select-container">
-                    <input type="text" class="symbol-select-input" placeholder="Search..." aria-label="Symbol Search" autocomplete="off">
-                    <svg class="dropdown-arrow" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
-                    <div class="custom-select-dropdown"></div>
-                </div>
-                <select class="pane-select chart-type-select" aria-label="Chart Type" title="Chart Type">
-                    <option value="candles">Candles</option>
-                    <option value="heikinAshi">HA</option>
-                    <option value="line">Line</option>
-                    <option value="bar">Bar</option>
-                </select>
-                <select class="pane-select interval-select" aria-label="Timeframe"></select>
-                <select class="pane-select indicator-select" aria-label="Indicators" title="Indicators">
-                    <option value="" disabled selected>ƒx</option>
-                    <option value="volume">Volume (${volText})</option>
-                    <option value="sma1">SMA 1 (${chartData.indicators.sma1Period}) (${sma1Text})</option>
-                    <option value="sma2">SMA 2 (${chartData.indicators.sma2Period}) (${sma2Text})</option>
-                    <option value="sma3">SMA 3 (${chartData.indicators.sma3Period}) (${sma3Text})</option>
-                    <option value="ema1">EMA 1 (${chartData.indicators.ema1Period}) (${ema1Text})</option>
-                    <option value="ema2">EMA 2 (${chartData.indicators.ema2Period}) (${ema2Text})</option>
-                    <option value="ema3">EMA 3 (${chartData.indicators.ema3Period}) (${ema3Text})</option>
-                    <option value="bb">BB ${chartData.indicators.bbPeriod} (${bbText})</option>
-                    <option value="rsi">RSI ${chartData.indicators.rsiPeriod} (${rsiText})</option>
-                    <option value="vwap">VWAP (${vwapText})</option>
-                    <option value="atr">ATR ${chartData.indicators.atrPeriod} (${atrText})</option>
-                    <option value="vpvr">Vol Profile (${chartData.indicators.vpvr ? 'On' : 'Off'})</option>
-                    <option value="sessions">Sessions (${chartData.indicators.sessions ? 'On' : 'Off'})</option>
-                </select>
-                <button class="settings-btn" id="${chartData.id}-screenshot" title="Take Screenshot">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
-                </button>
-                <button class="settings-btn" id="${chartData.id}-replay-toggle" title="Market Replay">
-                    ⏪
-                </button>
-                <button class="settings-btn" id="${chartData.id}-go-live" title="Reset Chart View">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle;"><polygon points="5 4 15 12 5 20"></polygon><line x1="19" y1="5" x2="19" y2="19"></line></svg>
-                </button>
-            </div>
-        </div>
-        <div class="chart-container" id="${chartData.id}-container">
-            <div class="chart-message" style="pointer-events: none;">Loading</div>
-            <div class="countdown-timer" id="${chartData.id}-timer"></div>
-        </div>
-    `;
-    return pane;
-}
+
+
 
 function populatePaneControls(chartData) {
     const pane = document.getElementById(chartData.id);
@@ -1414,8 +1230,8 @@ function populatePaneControls(chartData) {
         if (chartData.chart) {
             chartData.customPriceOffset = 0;
             // Reset zoom (barSpacing) and right margin
-            chartData.chart.timeScale().applyOptions({ rightOffset: getRightOffset(chartData), barSpacing: 8 });
-            scrollToNewestActualCandle(chartData);
+            chartData.chart.timeScale().applyOptions({ rightOffset: LayoutService.getRightOffset(chartData, state.chartCount), barSpacing: 8 });
+            LayoutService.scrollToNewestActualCandle(chartData, state.chartCount);
             chartData.chart.priceScale('right').applyOptions({ autoScale: true });
         }
     });
@@ -1580,7 +1396,7 @@ function populatePaneControls(chartData) {
             }
             
             if (indicator === "volume" || indicator === "rsi" || indicator === "atr") {
-                updateSubchartMargins(chartData);
+                LayoutService.updateSubchartMargins(chartData);
             }
 
             // Update text
@@ -2207,8 +2023,8 @@ function initializeChart(chartData) {
             }
         } else {
             chartData.customPriceOffset = 0;
-            chartData.chart.timeScale().applyOptions({ rightOffset: getRightOffset(chartData), barSpacing: 8 });
-            scrollToNewestActualCandle(chartData);
+            chartData.chart.timeScale().applyOptions({ rightOffset: LayoutService.getRightOffset(chartData, state.chartCount), barSpacing: 8 });
+            LayoutService.scrollToNewestActualCandle(chartData, state.chartCount);
             chartData.chart.priceScale('right').applyOptions({ autoScale: true });
         }
     });
@@ -2322,7 +2138,7 @@ function initializeChart(chartData) {
         priceLineVisible: false
     });
 
-    updateSubchartMargins(chartData);
+    LayoutService.updateSubchartMargins(chartData);
 
     // Bind drawing handle drag events for the drawing manager
     if (window.drawingManager) {
@@ -2452,98 +2268,58 @@ function checkAndInteractWithLine(chartData, clickedPrice, clickedTime, point) {
 }
 
 function openLineSettingsModal(chartData, lineObj, key) {
-    let modal = document.getElementById("line-settings-modal");
-    if (!modal) {
-        modal = document.createElement("div");
-        modal.id = "line-settings-modal";
-        modal.className = "settings-modal-overlay";
-        document.body.appendChild(modal);
-    }
-
     const isLight = state.theme === 'light';
     const defaultColor = isLight ? '#3b82f6' : '#60a5fa';
-    const color = lineObj.color || defaultColor;
-    const lineWidth = lineObj.lineWidth || 2;
-
-    modal.innerHTML = `
-        <div class="settings-modal-content" style="width: 280px;">
-            <h3>Horizontal Line Settings</h3>
-            <div class="settings-group">
-                <label>Price</label>
-                <input type="number" id="line-price-input" value="${lineObj.price}" step="any">
-            </div>
-            <div class="settings-group">
-                <label>Color</label>
-                <input type="color" id="line-color-input" value="${color}">
-            </div>
-            <div class="settings-group">
-                <label>Thickness</label>
-                <select id="line-width-input">
-                    <option value="1" ${lineWidth == 1 ? 'selected' : ''}>Thin</option>
-                    <option value="2" ${lineWidth == 2 ? 'selected' : ''}>Medium</option>
-                    <option value="3" ${lineWidth == 3 ? 'selected' : ''}>Thick</option>
-                    <option value="4" ${lineWidth == 4 ? 'selected' : ''}>Extra Thick</option>
-                </select>
-            </div>
-            <div class="settings-actions">
-                <button id="line-delete-btn">Delete</button>
-                <button id="line-cancel-btn">Cancel</button>
-                <button id="line-save-btn">Save</button>
-            </div>
-        </div>
-    `;
     
-    modal.style.display = "flex";
-
-    document.getElementById("line-cancel-btn").onclick = () => {
-        modal.style.display = "none";
-    };
-
-    document.getElementById("line-delete-btn").onclick = () => {
-        Object.values(state.charts).forEach(cd => {
-            if (cd.symbol === chartData.symbol) {
-                const priceLine = cd.renderedDrawings?.[lineObj.id];
-                if (priceLine) {
-                    if (priceLine instanceof HTMLElement) {
-                        priceLine.remove();
-                    } else {
-                        try { cd.candleSeries.removePriceLine(priceLine); } catch (e) {}
+    window.ModalService.openLineSettings({
+        price: lineObj.price,
+        color: lineObj.color || defaultColor,
+        lineWidth: lineObj.lineWidth || 2
+    }, {
+        onSave: (data) => {
+            lineObj.price = isNaN(data.price) ? lineObj.price : data.price;
+            lineObj.color = data.color;
+            lineObj.lineWidth = data.lineWidth;
+            
+            Object.values(state.charts).forEach(cd => {
+                if (cd.symbol === chartData.symbol) {
+                    const priceLine = cd.renderedDrawings?.[lineObj.id];
+                    if (priceLine && priceLine.applyOptions) {
+                        priceLine.applyOptions({
+                            price: lineObj.price,
+                            color: lineObj.color,
+                            lineWidth: lineObj.lineWidth
+                        });
                     }
-                    delete cd.renderedDrawings[lineObj.id];
                 }
-            }
-        });
-        const idx = state.drawings[key].findIndex(l => l.id === lineObj.id);
-        if (idx !== -1) state.drawings[key].splice(idx, 1);
-        saveDrawings();
-        modal.style.display = "none";
-    };
-
-    document.getElementById("line-save-btn").onclick = () => {
-        const newPrice = parseFloat(document.getElementById("line-price-input").value);
-        const newColor = document.getElementById("line-color-input").value;
-        const newWidth = parseInt(document.getElementById("line-width-input").value, 10);
-        
-        lineObj.price = isNaN(newPrice) ? lineObj.price : newPrice;
-        lineObj.color = newColor;
-        lineObj.lineWidth = newWidth;
-        
-        Object.values(state.charts).forEach(cd => {
-            if (cd.symbol === chartData.symbol) {
-                const priceLine = cd.renderedDrawings?.[lineObj.id];
-                if (priceLine && priceLine.applyOptions) {
-                    priceLine.applyOptions({
-                        price: lineObj.price,
-                        color: lineObj.color,
-                        lineWidth: lineObj.lineWidth
-                    });
+            });
+            
+            saveDrawings();
+            window.ModalService.closeModal("line-settings-modal");
+        },
+        onDelete: () => {
+            Object.values(state.charts).forEach(cd => {
+                if (cd.symbol === chartData.symbol) {
+                    const priceLine = cd.renderedDrawings?.[lineObj.id];
+                    if (priceLine) {
+                        if (priceLine instanceof HTMLElement) {
+                            priceLine.remove();
+                        } else {
+                            try { cd.candleSeries.removePriceLine(priceLine); } catch (e) {}
+                        }
+                        delete cd.renderedDrawings[lineObj.id];
+                    }
                 }
-            }
-        });
-        
-        saveDrawings();
-        modal.style.display = "none";
-    };
+            });
+            const idx = state.drawings[key].findIndex(l => l.id === lineObj.id);
+            if (idx !== -1) state.drawings[key].splice(idx, 1);
+            saveDrawings();
+            window.ModalService.closeModal("line-settings-modal");
+        },
+        onCancel: () => {
+            window.ModalService.closeModal("line-settings-modal");
+        }
+    });
 }
 
 function restoreDrawings(chartData) {
@@ -2560,119 +2336,66 @@ function renderVerticalLine(chartData, lineObj) {
 }
 
 function openVLineSettingsModal(chartData, lineObj) {
-    let modal = document.getElementById("vline-settings-modal");
-    if (!modal) {
-        modal = document.createElement("div");
-        modal.id = "vline-settings-modal";
-        modal.className = "settings-modal-overlay";
-        document.body.appendChild(modal);
-    }
-
     const key = chartData.symbol;
     const isLight = state.theme === 'light';
     const defaultColor = isLight ? '#3b82f6' : '#60a5fa';
-    const color = lineObj.color || defaultColor;
-    const lineWidth = lineObj.lineWidth || 2;
-
-    modal.innerHTML = `
-        <div class="settings-modal-content" style="width: 280px;">
-            <h3>Vertical Line Settings</h3>
-            <div class="settings-group">
-                <label>Color</label>
-                <input type="color" id="vline-color-input" value="${color}">
-            </div>
-            <div class="settings-group">
-                <label>Thickness</label>
-                <select id="vline-width-input">
-                    <option value="1" ${lineWidth == 1 ? 'selected' : ''}>Thin</option>
-                    <option value="2" ${lineWidth == 2 ? 'selected' : ''}>Medium</option>
-                    <option value="3" ${lineWidth == 3 ? 'selected' : ''}>Thick</option>
-                    <option value="4" ${lineWidth == 4 ? 'selected' : ''}>Extra Thick</option>
-                </select>
-            </div>
-            <div class="settings-actions">
-                <button id="vline-delete-btn" style="background: #ef4444; color: white; margin-right: auto;">Delete</button>
-                <button id="vline-cancel-btn" style="background: #394654; color: white;">Cancel</button>
-                <button id="vline-save-btn" style="background: #10b981; color: white;">Save</button>
-            </div>
-        </div>
-    `;
     
-    modal.style.display = "flex";
-
-    document.getElementById("vline-cancel-btn").onclick = () => {
-        modal.style.display = "none";
-    };
-
-    document.getElementById("vline-delete-btn").onclick = () => {
-        Object.values(state.charts).forEach(cd => {
-            if (cd.symbol === chartData.symbol) {
-                const el = document.getElementById(`vline-${cd.id}-${lineObj.id}`);
-                if (el) el.remove();
-            }
-        });
-        if (state.drawings[key]) {
-            state.drawings[key] = state.drawings[key].filter(d => d.id !== lineObj.id);
+    window.ModalService.openVLineSettings({
+        color: lineObj.color || defaultColor,
+        lineWidth: lineObj.lineWidth || 2
+    }, {
+        onSave: (data) => {
+            lineObj.color = data.color;
+            lineObj.lineWidth = data.lineWidth;
+            
+            Object.values(state.charts).forEach(cd => {
+                if (cd.symbol === chartData.symbol) renderVerticalLine(cd, lineObj);
+            });
+            
             saveDrawings();
+            window.ModalService.closeModal("vline-settings-modal");
+        },
+        onDelete: () => {
+            Object.values(state.charts).forEach(cd => {
+                if (cd.symbol === chartData.symbol) {
+                    const el = document.getElementById(`vline-${cd.id}-${lineObj.id}`);
+                    if (el) el.remove();
+                }
+            });
+            if (state.drawings[key]) {
+                state.drawings[key] = state.drawings[key].filter(d => d.id !== lineObj.id);
+                saveDrawings();
+            }
+            window.ModalService.closeModal("vline-settings-modal");
+        },
+        onCancel: () => {
+            window.ModalService.closeModal("vline-settings-modal");
         }
-        modal.style.display = "none";
-    };
-
-    document.getElementById("vline-save-btn").onclick = () => {
-        const newColor = document.getElementById("vline-color-input").value;
-        const newWidth = parseInt(document.getElementById("vline-width-input").value, 10);
-        
-        lineObj.color = newColor;
-        lineObj.lineWidth = newWidth;
-        
-        Object.values(state.charts).forEach(cd => {
-            if (cd.symbol === chartData.symbol) renderVerticalLine(cd, lineObj);
-        });
-        
-        saveDrawings();
-        modal.style.display = "none";
-    };
+    });
 }
 
 function openMarkerSettingsModal(chartData, markerObj, key) {
-    let modal = document.getElementById("marker-settings-modal");
-    if (!modal) {
-        modal = document.createElement("div");
-        modal.id = "marker-settings-modal";
-        modal.className = "settings-modal-overlay";
-        document.body.appendChild(modal);
-    }
-
     const typeLabel = markerObj.type === 'buyMarker' ? 'Buy Marker' : 'Sell Marker';
-
-    modal.innerHTML = `
-        <div class="settings-modal-content" style="width: 280px; text-align: center;">
-            <h3 style="margin-bottom: 24px;">Manage ${typeLabel}</h3>
-            <div class="settings-actions" style="justify-content: center; gap: 16px;">
-                <button id="marker-delete-btn" style="background: #ef4444; color: white; flex: 1;">Delete</button>
-                <button id="marker-cancel-btn" style="background: #394654; color: white; flex: 1;">Cancel</button>
-            </div>
-        </div>
-    `;
     
-    modal.style.display = "flex";
-
-    document.getElementById("marker-cancel-btn").onclick = () => {
-        modal.style.display = "none";
-    };
-
-    document.getElementById("marker-delete-btn").onclick = () => {
-        const lines = state.drawings[key];
-        if (lines) {
-            const idx = lines.findIndex(d => d.id === markerObj.id);
-            if (idx !== -1) lines.splice(idx, 1);
-            saveDrawings();
-            Object.values(state.charts).forEach(cd => {
-                if (cd.symbol === chartData.symbol) updateMarkers(cd);
-            });
+    window.ModalService.openMarkerSettings({
+        typeLabel: typeLabel
+    }, {
+        onDelete: () => {
+            const lines = state.drawings[key];
+            if (lines) {
+                const idx = lines.findIndex(d => d.id === markerObj.id);
+                if (idx !== -1) lines.splice(idx, 1);
+                saveDrawings();
+                Object.values(state.charts).forEach(cd => {
+                    if (cd.symbol === chartData.symbol) updateMarkers(cd);
+                });
+            }
+            window.ModalService.closeModal("marker-settings-modal");
+        },
+        onCancel: () => {
+            window.ModalService.closeModal("marker-settings-modal");
         }
-        modal.style.display = "none";
-    };
+    });
 }
 
 window.refreshChartMarkers = () => {
@@ -2682,185 +2405,105 @@ window.refreshChartMarkers = () => {
 function updateMarkers(chartData) {
     const drawings = state.drawings[chartData.symbol];
     DrawingService.updateMarkers(chartData, drawings);
-}
-
-function updateSubchartMargins(chartData) {
-    if (!chartData.chart) return;
-    const activeSubcharts = [];
-    if (chartData.indicators.rsi) activeSubcharts.push('rsi');
-    if (chartData.indicators.atr) activeSubcharts.push('atr');
-    
-    const count = activeSubcharts.length;
-    
-    // If ATR is active, it needs more space. Give the sub-panel area more height.
-    const totalSpace = chartData.indicators.atr ? 0.25 : (count > 0 ? 0.15 : 0);
-
-    // Uplift the main candles area by increasing its bottom margin.
-    chartData.chart.priceScale('right').applyOptions({
-        scaleMargins: { top: 0.1, bottom: count > 0 ? totalSpace + 0.05 : 0.15 }
-    });
-    
-    // Decouple volume from subchart stacking, restoring it as an overlay on the main chart
-    if (chartData.volumeSeries) {
-        // We want the base of the volume bars to sit slightly inside the sub-chart panel area.
-        // Let's target 5% of the chart height below the top of the sub-chart panel.
-        const volBottom = count > 0 ? totalSpace - 0.05 : 0;
-        
-        chartData.volumeSeries.priceScale().applyOptions({
-            scaleMargins: { 
-                top: 1.0 - volBottom - 0.20, // Give volume bars a consistent 20% height
-                bottom: volBottom 
-            }
-        });
+    if (window.paperTrading && window.paperTrading.updatePositionLines) {
+        window.paperTrading.updatePositionLines(chartData);
     }
-    
-    if (count === 0) return;
-    
-    // Distribute the total space evenly among active subcharts.
-    const spacePerChart = totalSpace / count;
-    activeSubcharts.forEach((id, index) => {
-        const topM = 1.0 - totalSpace + (index * spacePerChart) + 0.02;
-        const bottomM = 1.0 - (1.0 - totalSpace + ((index + 1) * spacePerChart));
-        
-        let scale = null;
-        if (id === 'rsi') scale = chartData.chart.priceScale('rsi');
-        else if (id === 'atr') scale = chartData.chart.priceScale('atr');
-        if (scale) scale.applyOptions({ scaleMargins: { top: topM, bottom: bottomM } });
-    });
 }
+
+
 
 function renderAlertLine(chartData, alertObj) {
     DrawingService.renderAlertLine(chartData, alertObj);
 }
 
 function openPriceAlertModal(chartData, defaultPrice) {
-    let modal = document.getElementById("alert-settings-modal");
-    if (!modal) {
-        modal = document.createElement("div");
-        modal.id = "alert-settings-modal";
-        modal.className = "settings-modal-overlay";
-        document.body.appendChild(modal);
-    }
+    const formattedPrice = defaultPrice < 1 ? defaultPrice.toPrecision(4) : defaultPrice.toFixed(2);
     
-    modal.innerHTML = `
-        <div class="settings-modal-content" style="width: 280px;">
-            <h3>Create Price Alert</h3>
-            <div class="settings-group">
-                <label>Price</label>
-                <input type="number" id="alert-price-input" value="${defaultPrice < 1 ? defaultPrice.toPrecision(4) : defaultPrice.toFixed(2)}" step="any">
-            </div>
-            <div class="settings-actions">
-                <button id="alert-cancel-btn" style="background: #394654; color: white;">Cancel</button>
-                <button id="alert-save-btn" style="background: #10b981; color: white;">Create</button>
-            </div>
-        </div>
-    `;
-    modal.style.display = "flex";
-    
-    document.getElementById("alert-cancel-btn").onclick = () => {
-        modal.style.display = "none";
-    };
-    
-    document.getElementById("alert-save-btn").onclick = () => {
-        const price = parseFloat(document.getElementById("alert-price-input").value);
-        if (!isNaN(price)) {
-            const id = Date.now().toString() + Math.random().toString().slice(2, 6);
-            const alertObj = {
-                type: 'alert',
-                symbol: chartData.symbol,
-                price: price,
-                id: id,
-                active: true
-            };
-            const key = chartData.symbol;
-            if (!state.drawings[key]) state.drawings[key] = [];
-            state.drawings[key].push(alertObj);
-            saveDrawings();
-            Object.values(state.charts).forEach(cd => {
-                if (cd.symbol === chartData.symbol) renderAlertLine(cd, alertObj);
-            });
-            
-            if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
-                Notification.requestPermission();
+    window.ModalService.openPriceAlert({
+        price: formattedPrice
+    }, {
+        onSave: (data) => {
+            const price = parseFloat(data.price);
+            if (!isNaN(price)) {
+                const id = Date.now().toString() + Math.random().toString().slice(2, 6);
+                const alertObj = {
+                    type: 'alert',
+                    symbol: chartData.symbol,
+                    price: price,
+                    id: id,
+                    active: true
+                };
+                const key = chartData.symbol;
+                if (!state.drawings[key]) state.drawings[key] = [];
+                state.drawings[key].push(alertObj);
+                saveDrawings();
+                Object.values(state.charts).forEach(cd => {
+                    if (cd.symbol === chartData.symbol) renderAlertLine(cd, alertObj);
+                });
+                
+                if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
+                    Notification.requestPermission();
+                }
             }
+            window.ModalService.closeModal("alert-settings-modal");
+        },
+        onCancel: () => {
+            window.ModalService.closeModal("alert-settings-modal");
         }
-        modal.style.display = "none";
-    };
+    });
 }
 
 function openAlertSettingsModal(chartData, alertObj, key) {
-    let modal = document.getElementById("alert-edit-modal");
-    if (!modal) {
-        modal = document.createElement("div");
-        modal.id = "alert-edit-modal";
-        modal.className = "settings-modal-overlay";
-        document.body.appendChild(modal);
-    }
-    
-    modal.innerHTML = `
-        <div class="settings-modal-content" style="width: 280px;">
-            <h3>Edit Price Alert</h3>
-            <div class="settings-group">
-                <label>Price</label>
-                <input type="number" id="edit-alert-price" value="${alertObj.price}" step="any">
-            </div>
-            <div class="settings-actions">
-                <button id="edit-alert-delete" style="background: #ef4444; color: white; margin-right: auto;">Delete</button>
-                <button id="edit-alert-cancel" style="background: #394654; color: white;">Cancel</button>
-                <button id="edit-alert-save" style="background: #10b981; color: white;">Save</button>
-            </div>
-        </div>
-    `;
-    modal.style.display = "flex";
-    
-    document.getElementById("edit-alert-cancel").onclick = () => {
-        modal.style.display = "none";
-    };
-    
-    document.getElementById("edit-alert-delete").onclick = () => {
-        Object.values(state.charts).forEach(cd => {
-            if (cd.symbol === chartData.symbol) {
-                const priceLine = cd.renderedDrawings?.[alertObj.id];
-                if (priceLine) {
-                    if (priceLine instanceof HTMLElement) {
-                        priceLine.remove();
-                    } else {
-                        try { cd.candleSeries.removePriceLine(priceLine); } catch (e) {}
-                    }
-                    delete cd.renderedDrawings[alertObj.id];
-                }
-            }
-        });
-        const idx = state.drawings[key].findIndex(l => l.id === alertObj.id);
-        if (idx !== -1) state.drawings[key].splice(idx, 1);
-        saveDrawings();
-        modal.style.display = "none";
-    };
-    
-    document.getElementById("edit-alert-save").onclick = () => {
-        const newPrice = parseFloat(document.getElementById("edit-alert-price").value);
-        alertObj.price = isNaN(newPrice) ? alertObj.price : newPrice;
-        alertObj.active = true;
-        
-        Object.values(state.charts).forEach(cd => {
-            if (cd.symbol === chartData.symbol) {
-                const priceLine = cd.renderedDrawings?.[alertObj.id];
-                if (priceLine) {
-                    if (priceLine instanceof HTMLElement) {
-                        if (priceLine._updatePosition) priceLine._updatePosition();
-                    } else if (priceLine.applyOptions) {
-                        priceLine.applyOptions({
-                            price: alertObj.price,
-                                        title: '🔔',
-                                        color: 'rgba(0, 0, 0, 0)'
-                        });
+    window.ModalService.openAlertSettings({
+        price: alertObj.price
+    }, {
+        onSave: (data) => {
+            const newPrice = parseFloat(data.price);
+            alertObj.price = isNaN(newPrice) ? alertObj.price : newPrice;
+            alertObj.active = true;
+            
+            Object.values(state.charts).forEach(cd => {
+                if (cd.symbol === chartData.symbol) {
+                    const priceLine = cd.renderedDrawings?.[alertObj.id];
+                    if (priceLine) {
+                        if (priceLine instanceof HTMLElement) {
+                            if (priceLine._updatePosition) priceLine._updatePosition();
+                        } else if (priceLine.applyOptions) {
+                            priceLine.applyOptions({
+                                price: alertObj.price,
+                                title: '🔔',
+                                color: 'rgba(0, 0, 0, 0)'
+                            });
+                        }
                     }
                 }
-            }
-        });
-        saveDrawings();
-        modal.style.display = "none";
-    };
+            });
+            saveDrawings();
+            window.ModalService.closeModal("alert-edit-modal");
+        },
+        onDelete: () => {
+            Object.values(state.charts).forEach(cd => {
+                if (cd.symbol === chartData.symbol) {
+                    const priceLine = cd.renderedDrawings?.[alertObj.id];
+                    if (priceLine) {
+                        if (priceLine instanceof HTMLElement) {
+                            priceLine.remove();
+                        } else {
+                            try { cd.candleSeries.removePriceLine(priceLine); } catch (e) {}
+                        }
+                        delete cd.renderedDrawings[alertObj.id];
+                    }
+                }
+            });
+            const idx = state.drawings[key].findIndex(l => l.id === alertObj.id);
+            if (idx !== -1) state.drawings[key].splice(idx, 1);
+            saveDrawings();
+            window.ModalService.closeModal("alert-edit-modal");
+        },
+        onCancel: () => {
+            window.ModalService.closeModal("alert-edit-modal");
+        }
+    });
 }
 
 function checkAlerts(chartData, currentPrice) {
@@ -3022,8 +2665,8 @@ async function loadChartData(chartData) {
         const forceReset = () => {
             if (!chartData.chart) return;
             try {
-                chartData.chart.timeScale().applyOptions({ rightOffset: getRightOffset(chartData), barSpacing: 8 });
-                scrollToNewestActualCandle(chartData);
+                chartData.chart.timeScale().applyOptions({ rightOffset: LayoutService.getRightOffset(chartData, state.chartCount), barSpacing: 8 });
+                LayoutService.scrollToNewestActualCandle(chartData, state.chartCount);
                 chartData.chart.priceScale('right').applyOptions({ autoScale: true });
             } catch(e) {}
         };
@@ -3111,10 +2754,10 @@ function syncChartWithCache(chartData) {
 function updateVpvrMarginAndScroll(chartData) {
     if (!chartData || !chartData.chart) return;
     
-    chartData.chart.timeScale().applyOptions({ rightOffset: getRightOffset(chartData) });
+    chartData.chart.timeScale().applyOptions({ rightOffset: LayoutService.getRightOffset(chartData, state.chartCount) });
     
     setTimeout(() => {
-        scrollToNewestActualCandle(chartData);
+        LayoutService.scrollToNewestActualCandle(chartData, state.chartCount);
         
         const isVpvrActive = chartData.indicators && chartData.indicators.vpvr && chartData.indicators.vpvrVisible !== false;
         const canvas = _ensureVPCanvas(chartData);
@@ -3135,41 +2778,11 @@ function updateVpvrMarginAndScroll(chartData) {
     }, 50);
 }
 
-function getRightOffset(chartData) {
-    const isVpvrActive = chartData && chartData.indicators && chartData.indicators.vpvr && chartData.indicators.vpvrVisible !== false;
-    if (isVpvrActive) {
-        return (state && state.chartCount === 1) ? 19 : 11;
-    }
-    return 1;
-}
 
-function getMarginOffset(chartData) {
-    const isVpvrActive = chartData && chartData.indicators && chartData.indicators.vpvr && chartData.indicators.vpvrVisible !== false;
-    if (isVpvrActive) {
-        return (state && state.chartCount === 1) ? 20 : 12;
-    }
-    return 2;
-}
 
-function scrollToNewestActualCandle(chartData) {
-    if (!chartData.chart || !chartData.cachedData || chartData.cachedData.length === 0) return;
-    try {
-        const timeScale = chartData.chart.timeScale();
-        const visibleRange = timeScale.getVisibleLogicalRange();
-        let visibleCount = 100;
-        if (visibleRange) {
-            visibleCount = Math.round(visibleRange.to - visibleRange.from);
-            if (visibleCount <= 0 || visibleCount > 1000) visibleCount = 100;
-        }
-        const lastIndex = chartData.cachedData.length - 1;
-        timeScale.setVisibleLogicalRange({
-            from: lastIndex - visibleCount + getMarginOffset(chartData),
-            to: lastIndex + getMarginOffset(chartData)
-        });
-    } catch (e) {
-        console.warn("Failed to scroll to newest actual candle:", e);
-    }
-}
+
+
+
 
 function subscribeChart(chartData) {
     if (chartData.liveSubscribed || chartData.symbol === "No Chart" || chartData.symbol === "none") return;
@@ -3574,7 +3187,7 @@ function flushChartUpdate(chartData) {
     }
 
     if (shouldShift) {
-        scrollToNewestActualCandle(chartData);
+        LayoutService.scrollToNewestActualCandle(chartData, state.chartCount);
     }
 
     if (chartData._vLineHandlers) {
@@ -3705,7 +3318,7 @@ function updateChartLegend(chartData, indexOrParam = null) {
                     else if (indType === 'sessions') select.options[13].text = `Sessions (Off)`;
                 }
  
-                updateSubchartMargins(chartData);
+                LayoutService.updateSubchartMargins(chartData);
                 saveLayoutState();
                 
                 delete legendEl.dataset.structKey;
@@ -3942,7 +3555,7 @@ function toggleIndicatorVisibility(chartData, indType) {
     } else {
         IndicatorService.toggleIndicatorVisibility(chartData, indType);
         if (indType === "volume" || indType === "rsi" || indType === "atr") {
-            updateSubchartMargins(chartData);
+            LayoutService.updateSubchartMargins(chartData);
         }
     }
     updateChartLegend(chartData);
@@ -4229,267 +3842,141 @@ function switchChartSymbol(chartId, newSymbol) {
 }
 
 function openSettingsModal(chartData, onlyIndicator = null) {
-    let modal = document.getElementById("chart-settings-modal");
-    if (!modal) {
-        modal = document.createElement("div");
-        modal.id = "chart-settings-modal";
-        modal.className = "settings-modal-overlay";
-        document.body.appendChild(modal);
-    }
-
-    const showGroup = (groupName) => {
-        if (!onlyIndicator) return ""; // show all if null
-        if (groupName === 'sma' && onlyIndicator.startsWith('sma')) return "";
-        if (groupName === 'ema' && onlyIndicator.startsWith('ema')) return "";
-        return onlyIndicator === groupName ? "" : "display: none;";
-    };
-
-    const titleText = onlyIndicator ? `${onlyIndicator.toUpperCase().replace('1',' 1').replace('2',' 2').replace('3',' 3')} Settings` : "Chart Settings";
-
-    modal.innerHTML = `
-        <div class="settings-modal-content">
-            <h3>${titleText}</h3>
-            <div class="settings-group" style="${showGroup('sma')}">
-                <label>${onlyIndicator && onlyIndicator.startsWith('sma') ? onlyIndicator.toUpperCase().replace('SMA', 'SMA ') : 'SMA'} Period</label>
-                <input type="number" id="sma-period-input" value="${onlyIndicator && onlyIndicator.startsWith('sma') ? chartData.indicators[onlyIndicator + 'Period'] : chartData.indicators.smaPeriod}" min="1">
-            </div>
-            <div class="settings-group" style="${showGroup('sma')}">
-                <label>SMA Color</label>
-                <input type="color" id="sma-color-input" value="${onlyIndicator && onlyIndicator.startsWith('sma') ? chartData.indicators[onlyIndicator + 'Color'] : chartData.indicators.smaColor}">
-            </div>
-            <div class="settings-group" style="${showGroup('sma')}">
-                <label>SMA Thickness</label>
-                <select id="sma-width-input">
-                    <option value="1" ${(onlyIndicator && onlyIndicator.startsWith('sma') ? chartData.indicators[onlyIndicator + 'LineWidth'] : chartData.indicators.smaLineWidth) == 1 ? 'selected' : ''}>Thin</option>
-                    <option value="2" ${(onlyIndicator && onlyIndicator.startsWith('sma') ? chartData.indicators[onlyIndicator + 'LineWidth'] : chartData.indicators.smaLineWidth) == 2 ? 'selected' : ''}>Medium</option>
-                    <option value="3" ${(onlyIndicator && onlyIndicator.startsWith('sma') ? chartData.indicators[onlyIndicator + 'LineWidth'] : chartData.indicators.smaLineWidth) == 3 ? 'selected' : ''}>Thick</option>
-                </select>
-            </div>
-            <div class="settings-group" style="${showGroup('ema')}">
-                <label>${onlyIndicator && onlyIndicator.startsWith('ema') ? onlyIndicator.toUpperCase().replace('EMA', 'EMA ') : 'EMA'} Period</label>
-                <input type="number" id="ema-period-input" value="${onlyIndicator && onlyIndicator.startsWith('ema') ? chartData.indicators[onlyIndicator + 'Period'] : chartData.indicators.emaPeriod}" min="1">
-            </div>
-            <div class="settings-group" style="${showGroup('ema')}">
-                <label>EMA Color</label>
-                <input type="color" id="ema-color-input" value="${onlyIndicator && onlyIndicator.startsWith('ema') ? chartData.indicators[onlyIndicator + 'Color'] : chartData.indicators.emaColor}">
-            </div>
-            <div class="settings-group" style="${showGroup('ema')}">
-                <label>EMA Thickness</label>
-                <select id="ema-width-input">
-                    <option value="1" ${(onlyIndicator && onlyIndicator.startsWith('ema') ? chartData.indicators[onlyIndicator + 'LineWidth'] : chartData.indicators.emaLineWidth) == 1 ? 'selected' : ''}>Thin</option>
-                    <option value="2" ${(onlyIndicator && onlyIndicator.startsWith('ema') ? chartData.indicators[onlyIndicator + 'LineWidth'] : chartData.indicators.emaLineWidth) == 2 ? 'selected' : ''}>Medium</option>
-                    <option value="3" ${(onlyIndicator && onlyIndicator.startsWith('ema') ? chartData.indicators[onlyIndicator + 'LineWidth'] : chartData.indicators.emaLineWidth) == 3 ? 'selected' : ''}>Thick</option>
-                </select>
-            </div>
-            <div class="settings-group" style="${showGroup('bb')}">
-                <label>BB Period</label>
-                <input type="number" id="bb-period-input" value="${chartData.indicators.bbPeriod}" min="1">
-            </div>
-            <div class="settings-group" style="${showGroup('bb')}">
-                <label>BB Std Dev</label>
-                <input type="number" id="bb-stddev-input" value="${chartData.indicators.bbStdDev}" min="0.1" step="0.1">
-            </div>
-            <div class="settings-group" style="${showGroup('bb')}">
-                <label>BB Color</label>
-                <input type="color" id="bb-color-input" value="${chartData.indicators.bbColor}">
-            </div>
-            <div class="settings-group" style="${showGroup('bb')}">
-                <label>BB Thickness</label>
-                <select id="bb-width-input">
-                    <option value="1" ${chartData.indicators.bbLineWidth == 1 ? 'selected' : ''}>Thin</option>
-                    <option value="2" ${chartData.indicators.bbLineWidth == 2 ? 'selected' : ''}>Medium</option>
-                    <option value="3" ${chartData.indicators.bbLineWidth == 3 ? 'selected' : ''}>Thick</option>
-                </select>
-            </div>
-            <div class="settings-group" style="${showGroup('rsi')}">
-                <label>RSI Period</label>
-                <input type="number" id="rsi-period-input" value="${chartData.indicators.rsiPeriod}" min="1">
-            </div>
-            <div class="settings-group" style="${showGroup('rsi')}">
-                <label>RSI Color</label>
-                <input type="color" id="rsi-color-input" value="${chartData.indicators.rsiColor}">
-            </div>
-            <div class="settings-group" style="${showGroup('rsi')}">
-                <label>RSI Thickness</label>
-                <select id="rsi-width-input">
-                    <option value="1" ${chartData.indicators.rsiLineWidth == 1 ? 'selected' : ''}>Thin</option>
-                    <option value="2" ${chartData.indicators.rsiLineWidth == 2 ? 'selected' : ''}>Medium</option>
-                    <option value="3" ${chartData.indicators.rsiLineWidth == 3 ? 'selected' : ''}>Thick</option>
-                </select>
-            </div>
-            <div class="settings-group" style="${showGroup('vwap')}">
-                <label>VWAP Color</label>
-                <input type="color" id="vwap-color-input" value="${chartData.indicators.vwapColor}">
-            </div>
-            <div class="settings-group" style="${showGroup('vwap')}">
-                <label>VWAP Thickness</label>
-                <select id="vwap-width-input">
-                    <option value="1" ${chartData.indicators.vwapLineWidth == 1 ? 'selected' : ''}>Thin</option>
-                    <option value="2" ${chartData.indicators.vwapLineWidth == 2 ? 'selected' : ''}>Medium</option>
-                    <option value="3" ${chartData.indicators.vwapLineWidth == 3 ? 'selected' : ''}>Thick</option>
-                </select>
-            </div>
-            <div class="settings-group" style="${showGroup('atr')}">
-                <label>ATR Period</label>
-                <input type="number" id="atr-period-input" value="${chartData.indicators.atrPeriod}" min="1">
-            </div>
-            <div class="settings-group" style="${showGroup('atr')}">
-                <label>ATR Color</label>
-                <input type="color" id="atr-color-input" value="${chartData.indicators.atrColor}">
-            </div>
-            <div class="settings-group" style="${showGroup('atr')}">
-                <label>ATR Thickness</label>
-                <select id="atr-width-input">
-                    <option value="1" ${chartData.indicators.atrLineWidth == 1 ? 'selected' : ''}>Thin</option>
-                    <option value="2" ${chartData.indicators.atrLineWidth == 2 ? 'selected' : ''}>Medium</option>
-                    <option value="3" ${chartData.indicators.atrLineWidth == 3 ? 'selected' : ''}>Thick</option>
-                </select>
-            </div>
-            <div class="settings-actions">
-                <button id="settings-cancel-btn">Cancel</button>
-                <button id="settings-save-btn">Save</button>
-            </div>
-        </div>
-    `;
-    
-    modal.style.display = "flex";
-
-    document.getElementById("settings-cancel-btn").onclick = () => {
-        modal.style.display = "none";
-    };
-
-    document.getElementById("settings-save-btn").onclick = () => {
-        const bbPeriod = parseInt(document.getElementById("bb-period-input").value, 10);
-        const bbStdDev = parseFloat(document.getElementById("bb-stddev-input").value);
-        const rsiPeriod = parseInt(document.getElementById("rsi-period-input").value, 10);
-        const atrPeriod = parseInt(document.getElementById("atr-period-input").value, 10);
-        
-        if (!isNaN(bbPeriod) && bbPeriod > 0) chartData.indicators.bbPeriod = bbPeriod;
-        if (!isNaN(bbStdDev) && bbStdDev > 0) chartData.indicators.bbStdDev = bbStdDev;
-        if (!isNaN(rsiPeriod) && rsiPeriod > 0) chartData.indicators.rsiPeriod = rsiPeriod;
-        if (!isNaN(atrPeriod) && atrPeriod > 0) chartData.indicators.atrPeriod = atrPeriod;
-        
-        chartData.indicators.bbColor = document.getElementById("bb-color-input").value;
-        chartData.indicators.rsiColor = document.getElementById("rsi-color-input").value;
-        chartData.indicators.vwapColor = document.getElementById("vwap-color-input").value;
-        chartData.indicators.atrColor = document.getElementById("atr-color-input").value;
-        chartData.indicators.bbLineWidth = parseInt(document.getElementById("bb-width-input").value, 10);
-        chartData.indicators.rsiLineWidth = parseInt(document.getElementById("rsi-width-input").value, 10);
-        chartData.indicators.vwapLineWidth = parseInt(document.getElementById("vwap-width-input").value, 10);
-        chartData.indicators.atrLineWidth = parseInt(document.getElementById("atr-width-input").value, 10);
-
-        if (onlyIndicator && onlyIndicator.startsWith('sma')) {
-            const period = parseInt(document.getElementById("sma-period-input").value, 10);
-            if (!isNaN(period) && period > 0) chartData.indicators[onlyIndicator + 'Period'] = period;
-            chartData.indicators[onlyIndicator + 'Color'] = document.getElementById("sma-color-input").value;
-            chartData.indicators[onlyIndicator + 'LineWidth'] = parseInt(document.getElementById("sma-width-input").value, 10);
+    window.ModalService.openChartSettings({
+        onlyIndicator: onlyIndicator,
+        indicators: chartData.indicators
+    }, {
+        onSave: (data) => {
+            const { bbPeriod, bbStdDev, rsiPeriod, atrPeriod, bbColor, rsiColor, vwapColor, atrColor, bbLineWidth, rsiLineWidth, vwapLineWidth, atrLineWidth, smaUpdates, emaUpdates } = data;
             
-            // Backwards compatibility alias for sma1
-            if (onlyIndicator === 'sma1') {
-                chartData.indicators.smaPeriod = chartData.indicators.sma1Period;
-                chartData.indicators.smaColor = chartData.indicators.sma1Color;
-                chartData.indicators.smaLineWidth = chartData.indicators.sma1LineWidth;
-            }
-        } else {
-            const smaPeriod = parseInt(document.getElementById("sma-period-input").value, 10);
-            if (!isNaN(smaPeriod) && smaPeriod > 0) chartData.indicators.smaPeriod = smaPeriod;
-            chartData.indicators.smaColor = document.getElementById("sma-color-input").value;
-            chartData.indicators.smaLineWidth = parseInt(document.getElementById("sma-width-input").value, 10);
-        }
-
-        if (onlyIndicator && onlyIndicator.startsWith('ema')) {
-            const period = parseInt(document.getElementById("ema-period-input").value, 10);
-            if (!isNaN(period) && period > 0) chartData.indicators[onlyIndicator + 'Period'] = period;
-            chartData.indicators[onlyIndicator + 'Color'] = document.getElementById("ema-color-input").value;
-            chartData.indicators[onlyIndicator + 'LineWidth'] = parseInt(document.getElementById("ema-width-input").value, 10);
+            if (bbPeriod !== undefined) chartData.indicators.bbPeriod = bbPeriod;
+            if (bbStdDev !== undefined) chartData.indicators.bbStdDev = bbStdDev;
+            if (rsiPeriod !== undefined) chartData.indicators.rsiPeriod = rsiPeriod;
+            if (atrPeriod !== undefined) chartData.indicators.atrPeriod = atrPeriod;
             
-            // Backwards compatibility alias for ema1
-            if (onlyIndicator === 'ema1') {
-                chartData.indicators.emaPeriod = chartData.indicators.ema1Period;
-                chartData.indicators.emaColor = chartData.indicators.ema1Color;
-                chartData.indicators.emaLineWidth = chartData.indicators.ema1LineWidth;
-            }
-        } else {
-            const emaPeriod = parseInt(document.getElementById("ema-period-input").value, 10);
-            if (!isNaN(emaPeriod) && emaPeriod > 0) chartData.indicators.emaPeriod = emaPeriod;
-            chartData.indicators.emaColor = document.getElementById("ema-color-input").value;
-            chartData.indicators.emaLineWidth = parseInt(document.getElementById("ema-width-input").value, 10);
-        }
+            if (bbColor !== undefined) chartData.indicators.bbColor = bbColor;
+            if (rsiColor !== undefined) chartData.indicators.rsiColor = rsiColor;
+            if (vwapColor !== undefined) chartData.indicators.vwapColor = vwapColor;
+            if (atrColor !== undefined) chartData.indicators.atrColor = atrColor;
+            if (bbLineWidth !== undefined) chartData.indicators.bbLineWidth = bbLineWidth;
+            if (rsiLineWidth !== undefined) chartData.indicators.rsiLineWidth = rsiLineWidth;
+            if (vwapLineWidth !== undefined) chartData.indicators.vwapLineWidth = vwapLineWidth;
+            if (atrLineWidth !== undefined) chartData.indicators.atrLineWidth = atrLineWidth;
 
-        if (chartData.smaSeries1) {
-            chartData.smaSeries1.applyOptions({ color: chartData.indicators.sma1Color, lineWidth: chartData.indicators.sma1LineWidth });
-            if (chartData.indicators.sma1) chartData.smaSeries1.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma1Period));
-        }
-        if (chartData.smaSeries2) {
-            chartData.smaSeries2.applyOptions({ color: chartData.indicators.sma2Color, lineWidth: chartData.indicators.sma2LineWidth });
-            if (chartData.indicators.sma2) chartData.smaSeries2.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma2Period));
-        }
-        if (chartData.smaSeries3) {
-            chartData.smaSeries3.applyOptions({ color: chartData.indicators.sma3Color, lineWidth: chartData.indicators.sma3LineWidth });
-            if (chartData.indicators.sma3) chartData.smaSeries3.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma3Period));
-        }
-        if (chartData.emaSeries1) {
-            chartData.emaSeries1.applyOptions({ color: chartData.indicators.ema1Color, lineWidth: chartData.indicators.ema1LineWidth });
-            if (chartData.indicators.ema1) chartData.emaSeries1.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema1Period));
-        }
-        if (chartData.emaSeries2) {
-            chartData.emaSeries2.applyOptions({ color: chartData.indicators.ema2Color, lineWidth: chartData.indicators.ema2LineWidth });
-            if (chartData.indicators.ema2) chartData.emaSeries2.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema2Period));
-        }
-        if (chartData.emaSeries3) {
-            chartData.emaSeries3.applyOptions({ color: chartData.indicators.ema3Color, lineWidth: chartData.indicators.ema3LineWidth });
-            if (chartData.indicators.ema3) chartData.emaSeries3.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema3Period));
-        }
-
-        if (chartData.bbUpperSeries) {
-            const bbOpts = { color: chartData.indicators.bbColor, lineWidth: chartData.indicators.bbLineWidth };
-            chartData.bbUpperSeries.applyOptions(bbOpts);
-            chartData.bbMiddleSeries.applyOptions(bbOpts);
-            chartData.bbLowerSeries.applyOptions(bbOpts);
-            if (chartData.indicators.bb) {
-                const bbData = calculateBB(chartData.cachedData, chartData.indicators.bbPeriod, chartData.indicators.bbStdDev);
-                chartData.bbUpperSeries.setData(bbData.upper);
-                chartData.bbMiddleSeries.setData(bbData.middle);
-                chartData.bbLowerSeries.setData(bbData.lower);
+            if (smaUpdates) {
+                if (onlyIndicator && onlyIndicator.startsWith('sma')) {
+                    if (smaUpdates.period !== undefined) chartData.indicators[onlyIndicator + 'Period'] = smaUpdates.period;
+                    if (smaUpdates.color !== undefined) chartData.indicators[onlyIndicator + 'Color'] = smaUpdates.color;
+                    if (smaUpdates.lineWidth !== undefined) chartData.indicators[onlyIndicator + 'LineWidth'] = smaUpdates.lineWidth;
+                    
+                    if (onlyIndicator === 'sma1') {
+                        chartData.indicators.smaPeriod = chartData.indicators.sma1Period;
+                        chartData.indicators.smaColor = chartData.indicators.sma1Color;
+                        chartData.indicators.smaLineWidth = chartData.indicators.sma1LineWidth;
+                    }
+                } else {
+                    if (smaUpdates.period !== undefined) chartData.indicators.smaPeriod = smaUpdates.period;
+                    if (smaUpdates.color !== undefined) chartData.indicators.smaColor = smaUpdates.color;
+                    if (smaUpdates.lineWidth !== undefined) chartData.indicators.smaLineWidth = smaUpdates.lineWidth;
+                }
             }
-        }
-        if (chartData.rsiSeries) {
-            chartData.rsiSeries.applyOptions({ color: chartData.indicators.rsiColor, lineWidth: chartData.indicators.rsiLineWidth });
-            if (chartData.indicators.rsi) {
-                chartData.rsiSeries.setData(calculateRSI(chartData.cachedData, chartData.indicators.rsiPeriod));
-            }
-        }
-        if (chartData.vwapSeries) {
-            chartData.vwapSeries.applyOptions({ color: chartData.indicators.vwapColor, lineWidth: chartData.indicators.vwapLineWidth });
-            if (chartData.indicators.vwap) chartData.vwapSeries.setData(calculateVWAP(chartData.cachedData, chartData.interval));
-        }
-        if (chartData.atrSeries) {
-            chartData.atrSeries.applyOptions({ color: chartData.indicators.atrColor, lineWidth: chartData.indicators.atrLineWidth });
-            if (chartData.indicators.atr) {
-                chartData.atrSeries.setData(calculateATR(chartData.cachedData, chartData.indicators.atrPeriod));
-            }
-        }
 
-        updateSubchartMargins(chartData);
+            if (emaUpdates) {
+                if (onlyIndicator && onlyIndicator.startsWith('ema')) {
+                    if (emaUpdates.period !== undefined) chartData.indicators[onlyIndicator + 'Period'] = emaUpdates.period;
+                    if (emaUpdates.color !== undefined) chartData.indicators[onlyIndicator + 'Color'] = emaUpdates.color;
+                    if (emaUpdates.lineWidth !== undefined) chartData.indicators[onlyIndicator + 'LineWidth'] = emaUpdates.lineWidth;
+                    
+                    if (onlyIndicator === 'ema1') {
+                        chartData.indicators.emaPeriod = chartData.indicators.ema1Period;
+                        chartData.indicators.emaColor = chartData.indicators.ema1Color;
+                        chartData.indicators.emaLineWidth = chartData.indicators.ema1LineWidth;
+                    }
+                } else {
+                    if (emaUpdates.period !== undefined) chartData.indicators.emaPeriod = emaUpdates.period;
+                    if (emaUpdates.color !== undefined) chartData.indicators.emaColor = emaUpdates.color;
+                    if (emaUpdates.lineWidth !== undefined) chartData.indicators.emaLineWidth = emaUpdates.lineWidth;
+                }
+            }
 
-        const select = document.querySelector(`#${chartData.id} .indicator-select`);
-        if (select) {
-            select.options[2].text = `SMA 1 (${chartData.indicators.sma1Period}) (${chartData.indicators.sma1 ? 'On' : 'Off'})`;
-            select.options[3].text = `SMA 2 (${chartData.indicators.sma2Period}) (${chartData.indicators.sma2 ? 'On' : 'Off'})`;
-            select.options[4].text = `SMA 3 (${chartData.indicators.sma3Period}) (${chartData.indicators.sma3 ? 'On' : 'Off'})`;
-            select.options[5].text = `EMA 1 (${chartData.indicators.ema1Period}) (${chartData.indicators.ema1 ? 'On' : 'Off'})`;
-            select.options[6].text = `EMA 2 (${chartData.indicators.ema2Period}) (${chartData.indicators.ema2 ? 'On' : 'Off'})`;
-            select.options[7].text = `EMA 3 (${chartData.indicators.ema3Period}) (${chartData.indicators.ema3 ? 'On' : 'Off'})`;
-            select.options[8].text = `BB ${chartData.indicators.bbPeriod} (${chartData.indicators.bb ? 'On' : 'Off'})`;
-            select.options[9].text = `RSI ${chartData.indicators.rsiPeriod} (${chartData.indicators.rsi ? 'On' : 'Off'})`;
-            select.options[10].text = `VWAP (${chartData.indicators.vwap ? 'On' : 'Off'})`;
-            select.options[11].text = `ATR ${chartData.indicators.atrPeriod} (${chartData.indicators.atr ? 'On' : 'Off'})`;
-            select.options[12].text = `Vol Profile (${chartData.indicators.vpvr ? 'On' : 'Off'})`;
-            select.options[13].text = `Sessions (${chartData.indicators.sessions ? 'On' : 'Off'})`;
+            if (chartData.smaSeries1) {
+                chartData.smaSeries1.applyOptions({ color: chartData.indicators.sma1Color, lineWidth: chartData.indicators.sma1LineWidth });
+                if (chartData.indicators.sma1) chartData.smaSeries1.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma1Period));
+            }
+            if (chartData.smaSeries2) {
+                chartData.smaSeries2.applyOptions({ color: chartData.indicators.sma2Color, lineWidth: chartData.indicators.sma2LineWidth });
+                if (chartData.indicators.sma2) chartData.smaSeries2.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma2Period));
+            }
+            if (chartData.smaSeries3) {
+                chartData.smaSeries3.applyOptions({ color: chartData.indicators.sma3Color, lineWidth: chartData.indicators.sma3LineWidth });
+                if (chartData.indicators.sma3) chartData.smaSeries3.setData(calculateSMA(chartData.cachedData, chartData.indicators.sma3Period));
+            }
+            if (chartData.emaSeries1) {
+                chartData.emaSeries1.applyOptions({ color: chartData.indicators.ema1Color, lineWidth: chartData.indicators.ema1LineWidth });
+                if (chartData.indicators.ema1) chartData.emaSeries1.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema1Period));
+            }
+            if (chartData.emaSeries2) {
+                chartData.emaSeries2.applyOptions({ color: chartData.indicators.ema2Color, lineWidth: chartData.indicators.ema2LineWidth });
+                if (chartData.indicators.ema2) chartData.emaSeries2.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema2Period));
+            }
+            if (chartData.emaSeries3) {
+                chartData.emaSeries3.applyOptions({ color: chartData.indicators.ema3Color, lineWidth: chartData.indicators.ema3LineWidth });
+                if (chartData.indicators.ema3) chartData.emaSeries3.setData(calculateEMA(chartData.cachedData, chartData.indicators.ema3Period));
+            }
+
+            if (chartData.bbUpperSeries) {
+                const bbOpts = { color: chartData.indicators.bbColor, lineWidth: chartData.indicators.bbLineWidth };
+                chartData.bbUpperSeries.applyOptions(bbOpts);
+                chartData.bbMiddleSeries.applyOptions(bbOpts);
+                chartData.bbLowerSeries.applyOptions(bbOpts);
+                if (chartData.indicators.bb) {
+                    const bbData = calculateBB(chartData.cachedData, chartData.indicators.bbPeriod, chartData.indicators.bbStdDev);
+                    chartData.bbUpperSeries.setData(bbData.upper);
+                    chartData.bbMiddleSeries.setData(bbData.middle);
+                    chartData.bbLowerSeries.setData(bbData.lower);
+                }
+            }
+            if (chartData.rsiSeries) {
+                chartData.rsiSeries.applyOptions({ color: chartData.indicators.rsiColor, lineWidth: chartData.indicators.rsiLineWidth });
+                if (chartData.indicators.rsi) {
+                    chartData.rsiSeries.setData(calculateRSI(chartData.cachedData, chartData.indicators.rsiPeriod));
+                }
+            }
+            if (chartData.vwapSeries) {
+                chartData.vwapSeries.applyOptions({ color: chartData.indicators.vwapColor, lineWidth: chartData.indicators.vwapLineWidth });
+                if (chartData.indicators.vwap) chartData.vwapSeries.setData(calculateVWAP(chartData.cachedData, chartData.interval));
+            }
+            if (chartData.atrSeries) {
+                chartData.atrSeries.applyOptions({ color: chartData.indicators.atrColor, lineWidth: chartData.indicators.atrLineWidth });
+                if (chartData.indicators.atr) {
+                    chartData.atrSeries.setData(calculateATR(chartData.cachedData, chartData.indicators.atrPeriod));
+                }
+            }
+
+            LayoutService.updateSubchartMargins(chartData);
+
+            const select = document.querySelector(`#${chartData.id} .indicator-select`);
+            if (select) {
+                select.options[2].text = `SMA 1 (${chartData.indicators.sma1Period}) (${chartData.indicators.sma1 ? 'On' : 'Off'})`;
+                select.options[3].text = `SMA 2 (${chartData.indicators.sma2Period}) (${chartData.indicators.sma2 ? 'On' : 'Off'})`;
+                select.options[4].text = `SMA 3 (${chartData.indicators.sma3Period}) (${chartData.indicators.sma3 ? 'On' : 'Off'})`;
+                select.options[5].text = `EMA 1 (${chartData.indicators.ema1Period}) (${chartData.indicators.ema1 ? 'On' : 'Off'})`;
+                select.options[6].text = `EMA 2 (${chartData.indicators.ema2Period}) (${chartData.indicators.ema2 ? 'On' : 'Off'})`;
+                select.options[7].text = `EMA 3 (${chartData.indicators.ema3Period}) (${chartData.indicators.ema3 ? 'On' : 'Off'})`;
+                select.options[8].text = `BB ${chartData.indicators.bbPeriod} (${chartData.indicators.bb ? 'On' : 'Off'})`;
+                select.options[9].text = `RSI ${chartData.indicators.rsiPeriod} (${chartData.indicators.rsi ? 'On' : 'Off'})`;
+                select.options[10].text = `VWAP (${chartData.indicators.vwap ? 'On' : 'Off'})`;
+                select.options[11].text = `ATR ${chartData.indicators.atrPeriod} (${chartData.indicators.atr ? 'On' : 'Off'})`;
+                select.options[12].text = `Vol Profile (${chartData.indicators.vpvr ? 'On' : 'Off'})`;
+                select.options[13].text = `Sessions (${chartData.indicators.sessions ? 'On' : 'Off'})`;
+            }
+            saveLayoutState();
+            window.ModalService.closeModal("chart-settings-modal");
+        },
+        onCancel: () => {
+            window.ModalService.closeModal("chart-settings-modal");
         }
-        saveLayoutState();
-        modal.style.display = "none";
-    };
+    });
 }
 
 function injectThemeStyles() {
@@ -6366,39 +5853,6 @@ function updateReplayAnalyticsPanel(chartId, openPnl = 0) {
     const chartData = state.charts[chartId];
     if (!chartData || !chartData.replay) return;
     
-    let panel = document.getElementById(`replay-analytics-panel-${chartId}`);
-    if (!panel) {
-        panel = document.createElement("div");
-        panel.id = `replay-analytics-panel-${chartId}`;
-        panel.className = "replay-analytics-panel-embedded";
-        panel.style.cssText = `
-            position: absolute;
-            top: 20px;
-            right: 20px;
-            bottom: auto !important;
-            height: fit-content !important;
-            min-height: unset !important;
-            width: 250px;
-            transform: scale(0.8);
-            transform-origin: top right;
-            background: #1e293b;
-            border: 1px solid #3b82f6;
-            border-radius: 8px;
-            padding: 16px;
-            color: white;
-            font-family: inherit;
-            z-index: 1000;
-            display: none;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-        `;
-        const container = document.getElementById(`${chartId}-container`);
-        if (container) {
-            container.appendChild(panel);
-        } else {
-            document.body.appendChild(panel);
-        }
-    }
-    
     const history = chartData.replay.paper.history;
     const wins = history.filter(t => t.pnl > 0);
     const losses = history.filter(t => t.pnl <= 0);
@@ -6420,19 +5874,22 @@ function updateReplayAnalyticsPanel(chartId, openPnl = 0) {
     const netPnl = (chartData.replay.paper.balance - chartData.replay.paper.initialBalance) + openPnl;
     const currentEquity = chartData.replay.paper.balance + openPnl;
     
-    panel.innerHTML = `
-        <h3 style="margin-top:0; color:#3b82f6; font-size:14px; border-bottom: 1px solid #394654; padding-bottom:8px;">Replay Statistics</h3>
-        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Starting Balance:</span> <span>${chartData.replay.paper.initialBalance.toFixed(2)} OHM</span></div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Current Equity:</span> <span>${currentEquity.toFixed(2)} OHM</span></div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Net PnL:</span> <span style="color:${netPnl>=0?'#10b981':'#ef4444'}">${netPnl>=0?'+':''}${netPnl.toFixed(2)} OHM</span></div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Win Rate:</span> <span>${winRate}%</span></div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Total Trades:</span> <span>${history.length}</span></div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Average Win:</span> <span style="color:#10b981">+${avgWin.toFixed(2)}</span></div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Average Loss:</span> <span style="color:#ef4444">-${Math.abs(avgLoss).toFixed(2)}</span></div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Largest Win:</span> <span style="color:#10b981">+${largestWin.toFixed(2)}</span></div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Largest Loss:</span> <span style="color:#ef4444">-${Math.abs(largestLoss).toFixed(2)}</span></div>
-        <div style="display:flex; justify-content:space-between; margin-bottom:4px; font-size:12px;"><span>Profit Factor:</span> <span>${profitFactor}</span></div>
-    `;
+    window.ModalService.renderReplayAnalyticsPanel(
+        document.getElementById(`${chartId}-container`),
+        {
+            panelId: `replay-analytics-panel-${chartId}`,
+            initialBalance: chartData.replay.paper.initialBalance,
+            currentEquity: currentEquity,
+            netPnl: netPnl,
+            winRate: winRate,
+            totalTrades: history.length,
+            avgWin: avgWin,
+            avgLoss: avgLoss,
+            largestWin: largestWin,
+            largestLoss: largestLoss,
+            profitFactor: profitFactor
+        }
+    );
 }
 
 function exitReplayMode(chartId) {
@@ -6472,194 +5929,57 @@ function exitReplayMode(chartId) {
     
     if (chartData && chartData.chart) {
         updateMarkers(chartData);
-        scrollToNewestActualCandle(chartData);
+        LayoutService.scrollToNewestActualCandle(chartData, state.chartCount);
     }
 }
 
 // --- Backtesting System ---
 function openBacktestModal() {
-    let modal = document.getElementById("backtest-modal");
-    if (!modal) {
-        modal = document.createElement("div");
-        modal.id = "backtest-modal";
-        modal.className = "settings-modal-overlay";
-        document.body.appendChild(modal);
-    }
-
     const activeChart = state.charts[state.activeChartId];
     const defaultSymbol = activeChart ? activeChart.symbol : 'BTC';
     const defaultInterval = activeChart ? activeChart.interval : '1h';
 
-    modal.innerHTML = `
-        <div class="settings-modal-content" style="width: 400px;">
-            <h3>Backtest Strategy</h3>
-            <div class="settings-group" style="flex-direction: column; align-items: flex-start;">
-                <label style="margin-bottom: 6px;">Strategy</label>
-                <select id="backtest-strategy" class="pt-input" style="width: 100%;">
-                    <option value="sma_crossover">SMA Crossover</option>
-                    <option value="rsi_strategy">RSI Strategy</option>
-                    <option value="vwap_ema_trend_pullback">VWAP EMA Trend Pullback</option>
-                </select>
-            </div>
-            <div class="settings-group" style="flex-direction: column; align-items: flex-start;">
-                <label style="margin-bottom: 6px;">Symbol</label>
-                <select id="backtest-symbol" class="pt-input" style="width: 100%;"></select>
-            </div>
-            <div class="settings-group" style="flex-direction: column; align-items: flex-start;">
-                <label style="margin-bottom: 6px;">Interval</label>
-                <select id="backtest-interval" class="pt-input" style="width: 100%;"></select>
-            </div>
-            <div class="settings-group">
-                <div style="flex: 1; display: flex; flex-direction: column; align-items: flex-start;">
-                    <label style="margin-bottom: 6px;">Start Date</label>
-                    <input type="date" id="backtest-start-date" class="pt-input" style="width: 100%;">
-                </div>
-                <div style="flex: 1; display: flex; flex-direction: column; align-items: flex-start;">
-                    <label style="margin-bottom: 6px;">End Date</label>
-                    <input type="date" id="backtest-end-date" class="pt-input" style="width: 100%;">
-                </div>
-            </div>
-            
-            <div id="sma-parameters" style="margin-top: 16px; border-top: 1px solid #394654; padding-top: 16px;">
-                <h4>SMA Crossover Parameters</h4>
-                <div class="settings-group">
-                    <label>Fast Period</label>
-                    <input type="number" id="sma-fast-period" value="10" min="1" class="pt-input" style="width: 80px;">
-                </div>
-                <div class="settings-group">
-                    <label>Slow Period</label>
-                    <input type="number" id="sma-slow-period" value="20" min="1" class="pt-input" style="width: 80px;">
-                </div>
-            </div>
+    window.ModalService.openBacktestConfig({
+        defaultSymbol: defaultSymbol,
+        defaultInterval: defaultInterval,
+        instruments: state.instruments
+    }, {
+        onRun: async (payload, ui) => {
+            const loadingEl = document.getElementById('backtest-loading');
+            const errorEl = document.getElementById('backtest-error');
+            loadingEl.style.display = 'block';
+            errorEl.style.display = 'none';
 
-            <div id="rsi-parameters" style="display: none; margin-top: 16px; border-top: 1px solid #394654; padding-top: 16px;">
-                <h4>RSI Strategy Parameters</h4>
-                <div class="settings-group">
-                    <label>RSI Period</label>
-                    <input type="number" id="rsi-period" value="14" min="1" class="pt-input" style="width: 80px;">
-                </div>
-                <div class="settings-group">
-                    <label>Overbought</label>
-                    <input type="number" id="rsi-overbought" value="70" min="1" class="pt-input" style="width: 80px;">
-                </div>
-                <div class="settings-group">
-                    <label>Oversold</label>
-                    <input type="number" id="rsi-oversold" value="30" min="1" class="pt-input" style="width: 80px;">
-                </div>
-            </div>
+            try {
+                const result = await ApiService.runBacktest(payload);
 
-            <div class="settings-actions">
-                <button id="backtest-cancel" class="pt-close-btn">Cancel</button>
-                <button id="backtest-run" class="pt-btn pt-buy-btn">Run Backtest</button>
-            </div>
-            <div id="backtest-loading" style="display: none; text-align: center; margin-top: 10px; color: #3b82f6;">Running backtest...</div>
-            <div id="backtest-error" style="display: none; text-align: center; margin-top: 10px; color: #ef4444;"></div>
-        </div>
-    `;
-    modal.style.display = "flex";
-
-    const symbolSelect = document.getElementById('backtest-symbol');
-    const intervalSelect = document.getElementById('backtest-interval');
-    const strategySelect = document.getElementById('backtest-strategy');
-    const smaParams = document.getElementById('sma-parameters');
-    const rsiParams = document.getElementById('rsi-parameters');
-
-    strategySelect.addEventListener('change', () => {
-        const strategy = strategySelect.value;
-        smaParams.style.display = 'none';
-        rsiParams.style.display = 'none';
-
-        if (strategy === 'sma_crossover') {
-            smaParams.style.display = 'block';
-        } else if (strategy === 'rsi_strategy') {
-            rsiParams.style.display = 'block';
-        }
-    });
-
-    state.instruments.forEach(inst => {
-        const option = document.createElement('option');
-        option.value = inst.symbol;
-        option.textContent = inst.symbol;
-        symbolSelect.appendChild(option);
-    });
-    symbolSelect.value = defaultSymbol;
-
-    const currentInstrument = state.instruments.find(inst => inst.symbol === defaultSymbol);
-    if (currentInstrument) {
-        currentInstrument.timeframes.forEach(tf => {
-            const option = document.createElement('option');
-            option.value = tf;
-            option.textContent = tf;
-            intervalSelect.appendChild(option);
-        });
-        intervalSelect.value = defaultInterval;
-    }
-
-    const endDate = new Date();
-    const startDate = new Date();
-    startDate.setMonth(endDate.getMonth() - 3);
-    document.getElementById('backtest-start-date').value = startDate.toISOString().split('T')[0];
-    document.getElementById('backtest-end-date').value = endDate.toISOString().split('T')[0];
-
-    document.getElementById("backtest-cancel").onclick = () => modal.style.display = "none";
-
-    document.getElementById("backtest-run").onclick = async () => {
-        const loadingEl = document.getElementById('backtest-loading');
-        const errorEl = document.getElementById('backtest-error');
-        loadingEl.style.display = 'block';
-        errorEl.style.display = 'none';
-
-        try {
-            const strategy = document.getElementById('backtest-strategy').value;
-            let parameters = {};
-            if (strategy === 'sma_crossover') {
-                parameters = {
-                    fast_period: parseInt(document.getElementById('sma-fast-period').value),
-                    slow_period: parseInt(document.getElementById('sma-slow-period').value),
+                state.backtest = { 
+                    ...result, 
+                    symbol: payload.symbol,
+                    interval: payload.interval
                 };
-            } else if (strategy === 'rsi_strategy') {
-                parameters = {
-                    rsi_period: parseInt(document.getElementById('rsi-period').value),
-                    overbought_level: parseInt(document.getElementById('rsi-overbought').value),
-                    oversold_level: parseInt(document.getElementById('rsi-oversold').value),
-                };
-            } else if (strategy === 'vwap_ema_trend_pullback') {
-                parameters = {};
-            }
-
-            const payload = {
-                strategy: strategy,
-                symbol: document.getElementById('backtest-symbol').value,
-                interval: document.getElementById('backtest-interval').value,
-                startTime: new Date(document.getElementById('backtest-start-date').value).getTime() / 1000,
-                endTime: new Date(document.getElementById('backtest-end-date').value).getTime() / 1000,
-                parameters: parameters
-            };
-            const result = await ApiService.runBacktest(payload);
-
-            state.backtest = { 
-                ...result, 
-                symbol: document.getElementById('backtest-symbol').value,
-                interval: document.getElementById('backtest-interval').value
-            };
-            StorageService.saveBacktest(state.backtest);
-            
-            const chartData = state.charts[state.activeChartId];
-            if (chartData) {
-                if (chartData.symbol !== state.backtest.symbol) {
-                    await switchChartSymbol(state.activeChartId, state.backtest.symbol);
+                StorageService.saveBacktest(state.backtest);
+                
+                const chartData = state.charts[state.activeChartId];
+                if (chartData) {
+                    if (chartData.symbol !== state.backtest.symbol) {
+                        await switchChartSymbol(state.activeChartId, state.backtest.symbol);
+                    }
+                    renderBacktestResults(state.charts[state.activeChartId], result);
                 }
-                renderBacktestResults(state.charts[state.activeChartId], result);
+                if (window.paperTrading) window.paperTrading.renderBacktestSummary(result.summary_stats, result.trades, result.equity_curve);
+                window.ModalService.closeModal("backtest-modal");
+            } catch (error) {
+                errorEl.textContent = `Error: ${error.message}`;
+                errorEl.style.display = 'block';
+            } finally {
+                loadingEl.style.display = 'none';
             }
-            if (window.paperTrading) window.paperTrading.renderBacktestSummary(result.summary_stats, result.trades, result.equity_curve);
-            modal.style.display = 'none';
-        } catch (error) {
-            errorEl.textContent = `Error: ${error.message}`;
-            errorEl.style.display = 'block';
-        } finally {
-            loadingEl.style.display = 'none';
+        },
+        onCancel: () => {
+            window.ModalService.closeModal("backtest-modal");
         }
-    };
+    });
 }
 
 function renderBacktestResults(chartData, results) {

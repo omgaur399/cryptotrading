@@ -72,14 +72,23 @@ class DrawingBase {
 
     getDeleteHandle() {
         if (!this._chart || !this._series || !this.isHovered) return null;
-        if (this._hoverX !== undefined && this._hoverY !== undefined) {
-            return { name: 'delete', x: this._hoverX + 25, y: this._hoverY - 25 };
+        
+        let targetX = this._hoverX;
+        let targetY = this._hoverY;
+        
+        if (targetX === undefined || targetY === undefined) {
+            const coords = this._getCoords ? this._getCoords() : null;
+            if (coords && coords.x1 !== undefined && coords.x2 !== undefined) {
+                targetX = (coords.x1 + coords.x2) / 2;
+                targetY = (coords.y1 + coords.y2) / 2;
+            } else if (this._p1) {
+                targetX = this.timeToX(this._p1.time);
+                targetY = safePriceToCoordinate(this._series, this._p1.price);
+            }
         }
-        if (!this._p1) return null;
-        const x = this.timeToX(this._p1.time);
-        const y = safePriceToCoordinate(this._series, this._p1.price);
-        if (x !== null && y !== null) {
-            return { name: 'delete', x: x - 15, y: y - 15 };
+        
+        if (targetX !== undefined && targetY !== undefined && targetX !== null && targetY !== null) {
+            return { name: 'delete', x: targetX, y: targetY - 28 };
         }
         return null;
     }
