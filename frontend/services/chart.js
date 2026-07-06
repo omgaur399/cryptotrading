@@ -92,12 +92,8 @@ const ChartService = {
     changeType(chartData) {
         if (!chartData.chart || !chartData.candleSeries) return;
         
-        // Save history first
-        let currentData = [];
-        try {
-            currentData = chartData.candleSeries.data();
-        } catch(e) { console.warn(e); }
         
+
         chartData.chart.removeSeries(chartData.candleSeries);
         
         const upColor = "#16a34a";
@@ -140,10 +136,6 @@ const ChartService = {
                 return res;
             }
         });
-        
-        if (currentData.length > 0) {
-            chartData.candleSeries.setData(currentData);
-        }
     },
 
     reset(chartData) {

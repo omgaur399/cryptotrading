@@ -318,6 +318,23 @@ const LayoutService = (() => {
         }
     }
 
+    function resetDefaultViewport(chartData, chartCount) {
+        if (!chartData.chart || !chartData.cachedData || chartData.cachedData.length === 0) return;
+        try {
+            const timeScale = chartData.chart.timeScale();
+            const visibleCount = 100; // default viewport
+            const lastIndex = chartData.cachedData.length - 1;
+            const marginOffset = getMarginOffset(chartData, chartCount);
+            timeScale.setVisibleLogicalRange({
+                from: lastIndex - visibleCount + marginOffset,
+                to: lastIndex + marginOffset
+            });
+        } catch (e) {
+            console.warn("Failed to reset default viewport:", e);
+        }
+    }
+
+
     return {
         createChartPane,
         positionGridHandles,
@@ -325,6 +342,7 @@ const LayoutService = (() => {
         getMarginOffset,
         getRightOffset,
         updateSubchartMargins,
-        scrollToNewestActualCandle
+        scrollToNewestActualCandle,
+        resetDefaultViewport
     };
 })();

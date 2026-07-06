@@ -420,7 +420,7 @@ async function initializeApp() {
 
     state.theme = StorageService.getTheme() || "dark";
     if (state.theme === "light") document.body.classList.add("light-theme");
-    injectThemeStyles();
+    ThemeService.injectThemeStyles();
 
     const savedDrawings = StorageService.getDrawings();
     if (savedDrawings) {
@@ -549,7 +549,7 @@ async function initializeApp() {
                 e.preventDefault();
                 e.stopPropagation();
                 const symbol = wlBtn.getAttribute('data-symbol');
-                if (symbol) toggleWatchlistSymbol(symbol);
+                if (symbol) WatchlistService.toggleWatchlistSymbol(symbol);
                 return;
             }
 
@@ -1190,7 +1190,7 @@ function populatePaneControls(chartData) {
         chartTypeSelect.value = chartData.chartType || "candles";
         chartTypeSelect.addEventListener("change", (e) => {
             chartData.chartType = e.target.value;
-            ChartService.changeType(chartData);
+            changeChartType(chartData);
             saveLayoutState();
         });
     }
@@ -1221,7 +1221,7 @@ function populatePaneControls(chartData) {
             e.stopPropagation();
             const symbol = chartData.symbol;
             if (symbol && symbol !== "No Chart" && symbol !== "none") {
-                toggleWatchlistSymbol(symbol);
+                WatchlistService.toggleWatchlistSymbol(symbol);
             }
         });
     }
@@ -1310,7 +1310,7 @@ function populatePaneControls(chartData) {
             e.preventDefault();
             e.stopPropagation();
             const symbol = wlBtn.getAttribute("data-symbol");
-            if (symbol) toggleWatchlistSymbol(symbol);
+            if (symbol) WatchlistService.toggleWatchlistSymbol(symbol);
             // syncAllWatchlistBtns() (called inside toggleWatchlistSymbol) already
             // updates the wl-active class in-place — no need to re-render the dropdown
             return;
@@ -1368,9 +1368,9 @@ function populatePaneControls(chartData) {
         } else if (indicator === "sessions") {
             chartData.indicators.sessions = !chartData.indicators.sessions;
             if (chartData.indicators.sessions) {
-                drawSessionBands(chartData);
+                OverlayService.SessionBands.draw(chartData);
             } else {
-                clearSessionBands(chartData);
+                OverlayService.SessionBands.clear(chartData);
             }
             e.target.options[13].text = `Sessions (${chartData.indicators.sessions ? 'On' : 'Off'})`;
         } else {
@@ -1448,7 +1448,7 @@ function initializeChart(chartData) {
     const container = document.getElementById(`${chartData.id}-container`);
     container.style.position = 'relative'; // Ensure absolute positioning works for overlays
     const isLight = state.theme === "light";
-    const themeOptions = getChartThemeOptions(isLight);
+    const themeOptions = ThemeService.getChartThemeOptions(isLight);
 
     ChartService.initialize(chartData, container, themeOptions, TimeUtils);
 
@@ -2024,7 +2024,7 @@ function initializeChart(chartData) {
         } else {
             chartData.customPriceOffset = 0;
             chartData.chart.timeScale().applyOptions({ rightOffset: LayoutService.getRightOffset(chartData, state.chartCount), barSpacing: 8 });
-            LayoutService.scrollToNewestActualCandle(chartData, state.chartCount);
+            LayoutService.resetDefaultViewport(chartData, state.chartCount);
             chartData.chart.priceScale('right').applyOptions({ autoScale: true });
         }
     });
@@ -2745,8 +2745,8 @@ function syncChartWithCache(chartData) {
     IndicatorService.updateAllIndicatorData(chartData);
     
     // Redraw canvas-based overlays after data changes
-    if (chartData.indicators.vpvr) drawVolumeProfile(chartData);
-    if (chartData.indicators.sessions) drawSessionBands(chartData);
+    if (chartData.indicators.vpvr) OverlayService.VolumeProfile.draw(chartData);
+    if (chartData.indicators.sessions) OverlayService.SessionBands.draw(chartData);
     
     updateChartLegend(chartData);
 }
@@ -2760,15 +2760,15 @@ function updateVpvrMarginAndScroll(chartData) {
         LayoutService.scrollToNewestActualCandle(chartData, state.chartCount);
         
         const isVpvrActive = chartData.indicators && chartData.indicators.vpvr && chartData.indicators.vpvrVisible !== false;
-        const canvas = _ensureVPCanvas(chartData);
+        const canvas = OverlayService.VolumeProfile.ensureCanvas(chartData);
         if (canvas) {
             canvas.style.display = isVpvrActive ? 'block' : 'none';
         }
         
         if (isVpvrActive) {
-            drawVolumeProfile(chartData);
+            OverlayService.VolumeProfile.draw(chartData);
         } else {
-            clearVolumeProfile(chartData);
+            OverlayService.VolumeProfile.clear(chartData);
         }
         
         const pane = document.getElementById(chartData.id);
@@ -3297,7 +3297,7 @@ function updateChartLegend(chartData, indexOrParam = null) {
                 } else if (indType === 'vpvr') {
                     updateVpvrMarginAndScroll(chartData);
                 } else if (indType === 'sessions') {
-                    clearSessionBands(chartData);
+                    OverlayService.SessionBands.clear(chartData);
                 }
                 
                 const pane = document.getElementById(chartData.id);
@@ -3545,12 +3545,12 @@ function toggleIndicatorVisibility(chartData, indType) {
         updateVpvrMarginAndScroll(chartData);
     } else if (indType === "sessions") {
         chartData.indicators.sessionsVisible = (chartData.indicators.sessionsVisible !== false) ? false : true;
-        const canvas = _ensureSessionCanvas(chartData);
+        const canvas = OverlayService.SessionBands.ensureCanvas(chartData);
         if (canvas) canvas.style.display = chartData.indicators.sessionsVisible ? 'block' : 'none';
         if (chartData.indicators.sessionsVisible) {
-            drawSessionBands(chartData);
+            OverlayService.SessionBands.draw(chartData);
         } else {
-            clearSessionBands(chartData);
+            OverlayService.SessionBands.clear(chartData);
         }
     } else {
         IndicatorService.toggleIndicatorVisibility(chartData, indType);
@@ -3821,13 +3821,7 @@ function switchChartSymbol(chartId, newSymbol) {
     loadChartData(chartData);
     saveLayoutState();
 
-    if (newSymbol && newSymbol !== 'none' && newSymbol !== 'No Chart') {
-        if (watchlistState && watchlistState.symbolsList && !watchlistState.symbolsList.includes(newSymbol)) {
-            watchlistState.symbolsList.push(newSymbol);
-            saveWatchlistToStorage(watchlistState.symbolsList);
-            if (typeof refreshWatchlistFromCharts === 'function') refreshWatchlistFromCharts();
-        }
-    }
+
 
     if (state.activeChartId === chartId) {
         clearOrderBook();
@@ -3979,916 +3973,7 @@ function openSettingsModal(chartData, onlyIndicator = null) {
     });
 }
 
-function injectThemeStyles() {
-    const style = document.createElement('style');
-    style.id = "theme-styles";
-    style.textContent = `
-        body.light-theme {
-            --primary-bg: #f8fafc;
-            --secondary-bg: #ffffff;
-            --text-primary: #0f172a;
-            --border-color: #cbd5e1;
-        }
-        body.light-theme .chart-pane {
-            background-color: var(--secondary-bg);
-            border-color: var(--border-color);
-        }
-        body.light-theme .pane-header {
-            border-bottom-color: var(--border-color);
-        }
-        body.light-theme .symbol-select-input, 
-        body.light-theme .pane-select {
-            background-color: #f1f5f9;
-            color: #0f172a;
-            border-color: #cbd5e1;
-        }
-        body.light-theme .custom-select-dropdown {
-            background-color: #ffffff;
-            border-color: #cbd5e1;
-        }
-        body.light-theme .custom-select-option:hover {
-            background-color: #f1f5f9;
-        }
-        body.light-theme .chart-message,
-        body.light-theme .ticker-symbol {
-            color: var(--text-primary);
-        }
-        .chart-message {
-            pointer-events: none;
-        }
-        .theme-btn, #chart-count {
-            background-color: transparent !important;
-            color: #d8dee8 !important;
-            border: 1px solid #394654 !important;
-            padding: 4px 10px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 12px;
-            font-family: inherit;
-            transition: background-color 150ms ease, border-color 150ms ease;
-        }
-        .theme-btn:hover, #chart-count:hover {
-            background-color: rgba(255, 255, 255, 0.08) !important;
-            border-color: #64748b !important;
-        }
-        .theme-btn option, #chart-count option {
-            background-color: #151b23;
-            color: #d8dee8;
-        }
-        body.light-theme .theme-btn, body.light-theme #chart-count {
-            background-color: transparent !important;
-            color: #0f172a !important;
-            border-color: #cbd5e1 !important;
-        }
-        body.light-theme .theme-btn:hover, body.light-theme #chart-count:hover {
-            background-color: rgba(15, 23, 42, 0.06) !important;
-            border-color: #94a3b8 !important;
-        }
-        body.light-theme .theme-btn option, body.light-theme #chart-count option {
-            background-color: #ffffff;
-            color: #0f172a;
-        }
-        
-        .symbol-select-container {
-            position: relative;
-            display: inline-flex;
-            align-items: center;
-        }
-        .symbol-select-input {
-            width: 65px !important;
-            padding-left: 4px !important;
-            padding-right: 16px !important;
-            box-sizing: border-box !important;
-            cursor: pointer;
-            font-size: 12px !important;
-            margin: 0 !important;
-        }
-        .dropdown-arrow {
-            position: absolute;
-            right: 4px;
-            pointer-events: none;
-            color: #8b9bb0;
-        }
-        .layout-6 .symbol-select-input,
-        .layout-8 .symbol-select-input {
-            width: 52px !important;
-            padding-left: 4px !important;
-            padding-right: 16px !important;
-            font-size: 11px !important;
-        }
-        .layout-6 .dropdown-arrow,
-        .layout-8 .dropdown-arrow {
-            width: 10px;
-            height: 10px;
-        }
-        .layout-6 .pane-controls,
-        .layout-8 .pane-controls {
-            gap: 2px !important;
-        }
-        
-        /* Sidebar Tabs Implementation */
-        .sidebar-tabbed { flex-direction: column !important; }
-        .sidebar-tabs-header { display: flex; background: #1e293b; border-bottom: 1px solid #394654; flex-shrink: 0; }
-        body.light-theme .sidebar-tabs-header { background: #f1f5f9; border-bottom-color: #cbd5e1; }
-        .sidebar-tab { flex: 1; text-align: center; padding: 10px 0; font-size: 12px; font-weight: 600; cursor: pointer; color: #8b9bb0; border-bottom: 2px solid transparent; transition: all 0.2s; }
-        body.light-theme .sidebar-tab { color: #64748b; }
-        .sidebar-tab.active { color: #3b82f6; border-bottom-color: #3b82f6; background: rgba(59, 130, 246, 0.1); }
-        .sidebar-slider-tabs { display: flex; width: 300%; height: 100%; transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1); }
-        .sidebar-panel { width: 33.3333%; height: 100%; overflow-y: auto; flex-shrink: 0; }
 
-        /* Paper Trading Module CSS */
-        .pt-container { padding: 16px; font-family: inherit; font-size: 13px; color: #d8dee8; display: flex; flex-direction: column; gap: 20px; overflow-y: auto; }
-        body.light-theme .pt-container { color: #0f172a; }
-        .pt-header { background: #151b23; border: 1px solid #394654; padding: 12px; border-radius: 6px; }
-        body.light-theme .pt-header { background: #ffffff; border-color: #cbd5e1; }
-        .pt-title { font-size: 14px; font-weight: 700; margin-bottom: 12px; color: #3b82f6; letter-spacing: 1px; }
-        .pt-stats-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-        .pt-stat-box { display: flex; flex-direction: column; }
-        .pt-label { font-size: 11px; color: #8b9bb0; text-transform: uppercase; }
-        body.light-theme .pt-label { color: #64748b; }
-        .pt-value { font-size: 14px; font-weight: 600; }
-        .pt-green { color: #10b981 !important; }
-        .pt-red { color: #ef4444 !important; }
-        .pt-form-group { margin-bottom: 10px; display: flex; flex-direction: column; gap: 4px; }
-        .pt-input { background: #0f1419; color: #d8dee8; border: 1px solid #394654; padding: 8px; border-radius: 4px; font-size: 13px; width: 100%; box-sizing: border-box;}
-        body.light-theme .pt-input { background: #f8fafc; color: #0f172a; border-color: #cbd5e1; }
-        .pt-btn-group { display: flex; gap: 8px; margin-top: 12px; }
-        .pt-btn { flex: 1; padding: 10px; font-weight: 700; border: none; border-radius: 4px; cursor: pointer; color: white; transition: opacity 0.2s; }
-        .pt-btn:hover { opacity: 0.9; }
-        .pt-buy-btn { background: #10b981; }
-        .pt-sell-btn { background: #ef4444; }
-        .pt-close-btn { background: #394654; color: white; padding: 4px 8px; border: none; border-radius: 4px; cursor: pointer; font-size: 11px;}
-        body.light-theme .pt-close-btn { background: #e2e8f0; color: #0f172a; }
-        .pt-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-        .pt-table th, .pt-table td { padding: 6px 4px; text-align: left; border-bottom: 1px solid #394654; }
-        body.light-theme .pt-table th, body.light-theme .pt-table td { border-bottom-color: #cbd5e1; }
-        .pt-table th { color: #8b9bb0; font-weight: normal; }
-        body.light-theme .pt-table th { color: #64748b; }
-        .pt-section { border-top: 1px dashed #394654; padding-top: 16px; }
-        body.light-theme .pt-section { border-top-color: #cbd5e1; }
-        .pt-collapsible-header { display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; font-weight: 700; color: #8b9bb0; text-transform: uppercase; font-size: 12px; }
-        body.light-theme .pt-collapsible-header { color: #64748b; }
-        .pt-collapsible-content { display: none; margin-top: 12px; }
-        .pt-collapsible-content.open { display: block; }
-
-        .layout-8 .ticker-change {
-            display: none !important;
-        }
-        .layout-8 .ticker-symbol {
-            font-size: 11px !important;
-        }
-        .pane-controls {
-            display: flex !important;
-            align-items: center !important;
-            gap: 4px !important;
-            flex-wrap: nowrap !important;
-        }
-        /* CRITICAL FIX: Ensure dropdown is not hidden by header overflow clipping */
-        .chart-pane, .pane-header, .pane-controls {
-            overflow: visible !important;
-        }
-        .custom-select-dropdown {
-            display: none;
-            position: absolute;
-            top: 100%;
-            left: 0;
-            min-width: 100%;
-            z-index: 1000;
-            background-color: #151b23;
-            border: 1px solid #394654;
-            border-radius: 4px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
-            margin-top: 4px;
-            max-height: 300px !important;
-            overflow-y: auto !important;
-        }
-        .custom-select-dropdown.show {
-            display: block;
-        }
-        .custom-select-option {
-            display: flex !important;
-            align-items: center !important;
-            transition: background-color 0.15s ease !important;
-            cursor: pointer;
-            padding: 6px 10px;
-        }
-        .custom-select-option.highlighted, .custom-select-option:hover {
-            background-color: rgba(59, 130, 246, 0.2) !important;
-        }
-        body.light-theme .custom-select-option.highlighted, body.light-theme .custom-select-option:hover {
-            background-color: rgba(59, 130, 246, 0.1) !important;
-        }
-        .option-symbol {
-            font-weight: 600;
-        }
-
-        /* Compact top header to maximize chart area */
-        header, .header, .dashboard-header {
-            padding: 6px 16px !important;
-            min-height: unset !important;
-            display: flex !important;
-            align-items: center !important;
-        }
-        header h1, .header h1, .dashboard-header h1 {
-            font-size: 18px !important;
-            margin: 0 !important;
-            line-height: 1 !important;
-        }
-        #chart-count, .theme-btn {
-            padding-top: 2px !important;
-            padding-bottom: 2px !important;
-            height: 26px !important;
-        }
-
-        /* Compact footer to prevent scrolling */
-        footer, .footer, .status-bar, #status-bar {
-            height: 24px !important;
-            min-height: 24px !important;
-            padding: 0 16px !important;
-            display: flex !important;
-            align-items: center !important;
-        }
-        .status-indicator, #timestamp, #data-status {
-            font-size: 11px !important;
-        }
-
-        /* Lock body to screen and prevent scrolling completely */
-        html, body {
-            overflow: hidden !important;
-        }
-
-        /* Ensure grid expands dynamically */
-        .charts-grid {
-            height: 100% !important;
-            min-height: 0 !important;
-        }
-        .chart-pane, .chart-container {
-            min-height: 0 !important;
-        }
-        .chart-container {
-            overflow: hidden !important;
-        }
-
-        /* Prevent countdown timer from blocking mouse events on the chart */
-        .countdown-timer {
-            pointer-events: none;
-            display: flex !important;
-            flex-direction: column !important;
-            justify-content: center !important;
-            align-items: center !important;
-            height: 22px !important;
-            padding: 1px 0 !important;
-            box-sizing: border-box !important;
-            gap: 0px !important;
-        }
-        .countdown-timer span {
-            font-size: 10.5px !important;
-            line-height: 1 !important;
-            margin: 0 !important;
-            padding: 0 !important;
-        }
-        .countdown-timer .timer-val {
-            font-size: 9px !important;
-            line-height: 1 !important;
-            opacity: 0.85 !important;
-        }
-
-        /* Market Ticker Styles */
-        .market-ticker-container {
-            display: flex;
-            flex-direction: column;
-            background-color: #151b23;
-            border-bottom: 1px solid #394654;
-            font-family: inherit;
-            overflow: hidden;
-            flex-shrink: 0;
-        }
-        .ticker-row {
-            display: flex;
-            align-items: center;
-            height: 18px;
-            border-bottom: 1px solid rgba(57, 70, 84, 0.3);
-        }
-        .ticker-row:last-child {
-            border-bottom: none;
-        }
-        .ticker-label {
-            padding: 0 8px;
-            font-weight: 700;
-            font-size: 9px;
-            letter-spacing: 0.5px;
-            white-space: nowrap;
-            z-index: 10;
-            background-color: #151b23;
-            box-shadow: 5px 0 5px -2px #151b23;
-            display: flex;
-            align-items: center;
-            height: 100%;
-        }
-        .gainers-label { color: #10b981; }
-        .losers-label { color: #ef4444; }
-        .ticker-scroll-wrapper {
-            flex: 1;
-            overflow: hidden;
-            position: relative;
-            display: flex;
-            align-items: center;
-            height: 100%;
-            mask-image: linear-gradient(to right, transparent, black 2%, black 98%, transparent);
-            -webkit-mask-image: linear-gradient(to right, transparent, black 2%, black 98%, transparent);
-        }
-        .ticker-scroll {
-            display: flex;
-            width: max-content;
-            animation: ticker-scroll 45s linear infinite;
-        }
-        .ticker-content {
-            display: flex;
-        }
-        .market-ticker-item {
-            display: inline-flex;
-            align-items: center;
-            margin-right: 16px;
-            gap: 4px;
-            cursor: pointer;
-            padding: 1px 4px;
-            border-radius: 3px;
-            transition: background-color 0.2s ease;
-            border: 1px solid transparent;
-        }
-        .market-ticker-item.active-mover {
-            border-color: #3b82f6;
-            background-color: rgba(59, 130, 246, 0.1);
-        }
-        .market-ticker-symbol {
-            font-weight: 600;
-            color: #d8dee8;
-            font-size: 10.5px;
-        }
-        .market-ticker-percent {
-            font-weight: 700;
-            font-size: 10.5px;
-        }
-        .market-ticker-percent.up { color: #10b981; }
-        .market-ticker-percent.down { color: #ef4444; }
-        @keyframes ticker-scroll {
-            0% { transform: translateX(0); }
-            100% { transform: translateX(-50%); }
-        }
-        body.light-theme .market-ticker-container,
-        body.light-theme .ticker-label {
-            background-color: #f8fafc;
-            box-shadow: 5px 0 5px -2px #f8fafc;
-        }
-        body.light-theme .market-ticker-container { border-color: #cbd5e1; }
-        body.light-theme .ticker-row { border-bottom: 1px solid rgba(203, 213, 225, 0.5); }
-        body.light-theme .market-ticker-symbol { color: #0f172a; }
-        body.light-theme .market-ticker-item.active-mover {
-            background-color: rgba(59, 130, 246, 0.15);
-        }
-
-        /* Hover Icon & Drag Interactions */
-        .hover-delete-btn {
-            position: absolute !important;
-            width: 18px !important;
-            height: 18px !important;
-            min-width: 18px !important;
-            max-width: 18px !important;
-            min-height: 18px !important;
-            max-height: 18px !important;
-            background: #151b23;
-            color: #ef4444;
-            border-radius: 4px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            z-index: 100;
-            font-size: 10px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.4);
-            pointer-events: none;
-            border: 1px solid #394654;
-            transition: background-color 0.1s ease, color 0.1s ease, border-color 0.1s ease !important;
-            box-sizing: border-box;
-            padding: 0;
-            margin: 0;
-            line-height: 1;
-        }
-        body.light-theme .hover-delete-btn {
-            background: #ffffff;
-            border-color: #cbd5e1;
-        }
-        .hover-delete-btn:hover, .hover-delete-btn.hovered {
-            background: #ef4444;
-            color: white;
-            border-color: #ef4444;
-        }
-        .hover-add-alert-btn {
-            position: absolute !important;
-            width: 18px !important;
-            height: 18px !important;
-            min-width: 18px !important;
-            max-width: 18px !important;
-            min-height: 18px !important;
-            max-height: 18px !important;
-            background: #151b23;
-            color: #10b981;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            z-index: 100;
-            font-size: 14px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.4);
-            pointer-events: none;
-            border: 1px solid #394654;
-            transition: background-color 0.1s ease, color 0.1s ease, border-color 0.1s ease !important;
-            box-sizing: border-box;
-            padding: 0;
-            margin: 0;
-            line-height: 1;
-            font-weight: bold;
-        }
-        body.light-theme .hover-add-alert-btn {
-            background: #ffffff;
-            border-color: #cbd5e1;
-        }
-        .hover-add-alert-btn:hover, .hover-add-alert-btn.hovered {
-            background: #10b981;
-            color: white;
-            border-color: #10b981;
-        }
-        .chart-container.hovering-hline,
-        .chart-container.hovering-hline * {
-            cursor: ns-resize !important;
-        }
-        .chart-container.hovering-vline,
-        .chart-container.hovering-vline * {
-            cursor: pointer !important;
-        }
-        .chart-container.hovering-btn,
-        .chart-container.hovering-btn * {
-            cursor: pointer !important;
-        }
-        .vertical-line-drawing {
-            cursor: pointer;
-        }
-        .vertical-line-drawing:hover {
-            box-shadow: 0 0 4px 1px rgba(0,0,0,0.5);
-            opacity: 0.8;
-        }
-        body.light-theme .vertical-line-drawing:hover {
-            box-shadow: 0 0 4px 1px rgba(255,255,255,0.5);
-        }
-        .alert-popup {
-            position: fixed;
-            bottom: 20px;
-            right: 20px;
-            background: #f59e0b;
-            color: #fff;
-            padding: 16px;
-            border-radius: 8px;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            z-index: 9999;
-            transition: opacity 0.3s ease;
-            font-family: inherit;
-            pointer-events: none;
-        }
-
-        .settings-modal-overlay {
-            position: fixed;
-            top: 0; left: 0; right: 0; bottom: 0;
-            background: rgba(0, 0, 0, 0.7);
-            display: none;
-            justify-content: center;
-            align-items: center;
-            z-index: 1000;
-        }
-        .settings-modal-content {
-            background: #151b23;
-            padding: 24px;
-            border-radius: 8px;
-            border: 1px solid #394654;
-            width: 320px;
-            max-height: 85vh;
-            overflow-y: auto;
-            color: #d8dee8;
-            font-family: inherit;
-        }
-        body.light-theme .settings-modal-content {
-            background: #ffffff;
-            border-color: #cbd5e1;
-            color: #0f172a;
-        }
-        .settings-modal-content h3 {
-            margin-top: 0;
-            margin-bottom: 16px;
-            font-size: 16px;
-        }
-        .settings-group {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 12px;
-        }
-        .settings-group label {
-            font-size: 13px;
-        }
-        .settings-group input[type="number"], .settings-group select {
-            width: 80px;
-            background: #0f1419;
-            color: #d8dee8;
-            border: 1px solid #394654;
-            border-radius: 4px;
-            padding: 4px;
-            font-size: 13px;
-        }
-        body.light-theme .settings-group input[type="number"], body.light-theme .settings-group select {
-            background: #f1f5f9;
-            color: #0f172a;
-            border-color: #cbd5e1;
-        }
-        .settings-group input[type="color"] {
-            width: 40px;
-            height: 24px;
-            padding: 0;
-            border: none;
-            border-radius: 4px;
-            cursor: pointer;
-            background: transparent;
-        }
-        .settings-actions {
-            display: flex;
-            justify-content: flex-end;
-            gap: 12px;
-            margin-top: 20px;
-        }
-        .settings-actions button {
-            padding: 6px 16px;
-            border-radius: 4px;
-            border: none;
-            cursor: pointer;
-            font-family: inherit;
-            font-size: 13px;
-        }
-        #settings-cancel-btn {
-            background: #394654;
-            color: white;
-        }
-        body.light-theme #settings-cancel-btn {
-            background: #e2e8f0;
-            color: #0f172a;
-        }
-        #settings-save-btn {
-            background: #10b981;
-            color: white;
-        }
-        #line-cancel-btn { background: #394654; color: white; }
-        body.light-theme #line-cancel-btn { background: #e2e8f0; color: #0f172a; }
-        #line-save-btn { background: #10b981; color: white; }
-        #line-delete-btn { background: #ef4444; color: white; margin-right: auto; }
-        .settings-btn {
-            background: transparent;
-            border: none;
-            cursor: pointer;
-            font-size: 16px;
-            padding: 4px;
-            margin-left: 4px;
-            opacity: 0.7;
-        }
-        .settings-btn:hover {
-            opacity: 1;
-        }
-        /* Active Chart Pane Highlight */
-        .chart-pane.active-chart {
-            border: 1px solid #3b82f6;
-            box-shadow: 0 0 8px -2px rgba(59, 130, 246, 0.5);
-        }
-        body.light-theme .chart-pane.active-chart {
-            border: 1px solid #3b82f6;
-            box-shadow: 0 0 8px -1px rgba(59, 130, 246, 0.4);
-        }
-        
-        /* Asset Info Panel Styles */
-        .charts-grid.layout-1.with-info-panel {
-            display: grid;
-            grid-template-columns: 1fr 280px;
-            gap: 12px;
-            /* Lock grid height to screen view to prevent panel from stretching it */
-            height: calc(100vh - 105px) !important;
-        }
-        /* Force children to respect grid height so overflow scrolling kicks in */
-        .charts-grid.layout-1.with-info-panel > * {
-            min-height: 0;
-        }
-        .charts-grid.layout-1.with-info-panel .chart-pane {
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-        }
-        .charts-grid.layout-1.with-info-panel .chart-container {
-            flex: 1;
-            min-height: 0;
-        }
-        @media (max-width: 1024px) {
-            .charts-grid.layout-1.with-info-panel {
-                grid-template-columns: 1fr;
-                height: auto;
-            }
-            .charts-grid.layout-1.with-info-panel .chart-pane {
-                height: 60vh;
-            }
-        }
-        
-        .right-sidebar-wrapper {
-            background-color: #151b23;
-            border: 1px solid #394654;
-            border-radius: 8px;
-            display: flex;
-            flex-direction: row;
-            height: 100%;
-            overflow: hidden;
-            color: #d8dee8;
-            font-family: inherit;
-        }
-        body.light-theme .right-sidebar-wrapper {
-            background-color: #ffffff;
-            border-color: #cbd5e1;
-            color: #0f172a;
-        }
-        .sidebar-viewport {
-            flex: 1;
-            overflow: hidden;
-            position: relative;
-        }
-        .sidebar-slider {
-            display: flex;
-            width: 200%;
-            height: 100%;
-            transition: transform 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        .asset-info-panel, .order-book-panel {
-            width: 33.3333%;
-            display: flex;
-            flex-direction: column;
-            overflow-y: auto;
-            height: 100%;
-            background: transparent;
-            border: none;
-            border-radius: 0;
-            flex-shrink: 0;
-        }
-        .ob-toggle-btn {
-            width: 18px;
-            background: #1e293b;
-            color: #8b9bb0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            border-left: 1px solid #394654;
-            font-size: 10px;
-            font-weight: 600;
-            letter-spacing: 2px;
-            writing-mode: vertical-rl;
-            text-orientation: mixed;
-            user-select: none;
-            transition: background 0.2s, color 0.2s;
-            flex-shrink: 0;
-        }
-        body.light-theme .ob-toggle-btn {
-            background: #f1f5f9;
-            color: #64748b;
-            border-left-color: #cbd5e1;
-        }
-        .ob-toggle-btn:hover {
-            background: #334155;
-            color: #ffffff;
-        }
-        body.light-theme .ob-toggle-btn:hover {
-            background: #e2e8f0;
-            color: #0f172a;
-        }
-        /* Order Book Styles */
-        .ob-header {
-            padding: 16px;
-            border-bottom: 1px solid #394654;
-            text-align: center;
-            flex-shrink: 0;
-        }
-        body.light-theme .ob-header {
-            border-bottom-color: #cbd5e1;
-        }
-        .ob-symbol-name {
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 4px;
-        }
-        .ob-price-row {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 8px;
-        }
-        .ob-current-price {
-            font-size: 18px;
-            font-weight: 700;
-        }
-        .ob-24h-change {
-            font-size: 13px;
-            font-weight: 600;
-            padding: 2px 6px;
-            border-radius: 4px;
-        }
-        .ob-col-headers {
-            display: flex;
-            justify-content: space-between;
-            padding: 8px 16px;
-            color: #8b9bb0;
-            font-weight: 600;
-            border-bottom: 1px solid #394654;
-            flex-shrink: 0;
-        }
-        body.light-theme .ob-col-headers {
-            color: #64748b;
-            border-bottom-color: #cbd5e1;
-        }
-        .ob-scroll-container {
-            flex: 1;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            font-size: 12px;
-            position: relative;
-        }
-        .ob-asks, .ob-bids {
-            display: flex;
-            flex-direction: column;
-        }
-        .ob-asks {
-            justify-content: flex-end;
-        }
-        .ob-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 2px 16px;
-            position: relative;
-        }
-        .ob-row span {
-            z-index: 1;
-        }
-        .ob-ask-price { color: #ef4444; font-weight: 500; }
-        .ob-bid-price { color: #10b981; font-weight: 500; }
-        .ob-size { color: #d8dee8; }
-        body.light-theme .ob-size { color: #0f172a; }
-        .ob-spread {
-            text-align: center;
-            padding: 6px 0;
-            margin: 4px 0;
-            border-top: 1px solid #394654;
-            border-bottom: 1px solid #394654;
-            color: #8b9bb0;
-            font-weight: 600;
-            flex-shrink: 0;
-        }
-        body.light-theme .ob-spread {
-            border-top-color: #cbd5e1;
-            border-bottom-color: #cbd5e1;
-            color: #64748b;
-        }
-        .ob-bg {
-            position: absolute;
-            top: 0;
-            right: 0;
-            height: 100%;
-            opacity: 0.15;
-            z-index: 0;
-            transition: width 0.1s;
-        }
-        .ob-ask-bg { background-color: #ef4444; }
-        .ob-bid-bg { background-color: #10b981; }
-        .info-panel-content {
-            padding: 16px;
-            display: flex;
-            flex-direction: column;
-            gap: 20px;
-        }
-        .info-panel-message {
-            text-align: center;
-            padding: 40px 20px;
-            color: #8b9bb0;
-            font-size: 14px;
-        }
-        .info-header {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .info-logo {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            font-size: 18px;
-            color: #fff;
-        }
-        .info-title h2 {
-            margin: 0;
-            font-size: 18px;
-            font-weight: 600;
-        }
-        .info-symbol {
-            font-size: 13px;
-            color: #8b9bb0;
-            text-transform: uppercase;
-        }
-        .info-price-section {
-            display: flex;
-            align-items: baseline;
-            gap: 12px;
-        }
-        .info-price {
-            font-size: 28px;
-            font-weight: 700;
-        }
-        .info-change {
-            font-size: 14px;
-            font-weight: 600;
-            padding: 4px 8px;
-            border-radius: 4px;
-        }
-        .perf-up {
-            color: #10b981;
-            background: rgba(16, 185, 129, 0.1);
-        }
-        .perf-down {
-            color: #ef4444;
-            background: rgba(239, 68, 68, 0.1);
-        }
-        .info-section h3 {
-            margin: 0 0 12px 0;
-            font-size: 14px;
-            color: #8b9bb0;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            border-bottom: 1px solid #394654;
-            padding-bottom: 6px;
-        }
-        body.light-theme .info-section h3 {
-            color: #64748b;
-            border-bottom-color: #cbd5e1;
-        }
-        .info-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 12px 16px;
-        }
-        .info-item {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-        .info-label {
-            font-size: 12px;
-            color: #8b9bb0;
-        }
-        body.light-theme .info-label {
-            color: #64748b;
-        }
-        .info-value {
-            font-size: 14px;
-            font-weight: 500;
-        }
-        .perf-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(60px, 1fr));
-            gap: 8px;
-        }
-        .perf-card {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            padding: 8px 4px;
-            border-radius: 6px;
-            gap: 4px;
-        }
-        .perf-period {
-            font-size: 11px;
-            opacity: 0.8;
-            font-weight: 600;
-        }
-        .perf-val {
-            font-size: 13px;
-            font-weight: 600;
-        }
-    `;
-    document.head.appendChild(style);
-}
 
 function toggleTheme() {
     state.theme = state.theme === "dark" ? "light" : "dark";
@@ -4900,7 +3985,7 @@ function toggleTheme() {
     const btn = document.getElementById("theme-toggle");
     if (btn) btn.textContent = isLight ? "🌙" : "☀️";
     
-    const themeOptions = getChartThemeOptions(isLight);
+    const themeOptions = ThemeService.getChartThemeOptions(isLight);
     Object.values(state.charts).forEach(chartData => {
         if (chartData.chart) chartData.chart.applyOptions(themeOptions);
         if (chartData.renderedDrawings) {
@@ -4917,26 +4002,7 @@ function toggleTheme() {
     });
 }
 
-function getChartThemeOptions(isLight) {
-    return {
-        layout: {
-            background: { color: isLight ? "#ffffff" : "#11161d" },
-            textColor: isLight ? "#1e293b" : "#d8dee8",
-            fontSize: 10, // Reduce native chart text size to shrink axis width
-        },
-        grid: {
-            vertLines: { color: isLight ? "#f1f5f9" : "#26313d" },
-            horzLines: { color: isLight ? "#f1f5f9" : "#26313d" },
-        },
-        timeScale: { borderColor: isLight ? "#cbd5e1" : "#394654" },
-        rightPriceScale: { borderColor: isLight ? "#cbd5e1" : "#394654" },
-        crosshair: {
-            mode: 0, // CrosshairMode.Normal - free moving crosshair instead of magnet snapping
-            horzLine: { color: isLight ? "#64748b" : "#8b9bb0", style: 1, labelBackgroundColor: isLight ? "#334155" : "#151b23" },
-            vertLine: { color: isLight ? "#64748b" : "#8b9bb0", style: 1, labelBackgroundColor: isLight ? "#334155" : "#151b23" }
-        }
-    };
-}
+
 
 const assetInfoCache = {};
 
@@ -5110,8 +4176,8 @@ async function fetchMarketMovers() {
                 };
             }
         });
-        if (typeof updateWatchlistFromMarketCache === 'function') {
-            updateWatchlistFromMarketCache();
+        if (typeof WatchlistService !== 'undefined' && WatchlistService.updateWatchlistFromMarketCache) {
+            WatchlistService.updateWatchlistFromMarketCache();
         }
 
         const topGainers = changes.slice(0, 10);
@@ -6064,183 +5130,11 @@ function renderBacktestResults(chartData, results) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 
-function _ensureVPCanvas(chartData) {
-    const container = document.getElementById(`${chartData.id}-container`);
-    if (!container) return null;
-    let canvas = container.querySelector('.vp-canvas');
-    if (!canvas) {
-        canvas = document.createElement('canvas');
-        canvas.className = 'vp-canvas';
-        canvas.style.cssText = `
-            position:absolute; top:0; left:0; width:100%; height:100%;
-            pointer-events:none; z-index:30;
-        `;
-        container.appendChild(canvas);
-    }
-    return canvas;
-}
 
-function clearVolumeProfile(chartData) {
-    const container = document.getElementById(`${chartData.id}-container`);
-    if (!container) return;
-    const canvas = container.querySelector('.vp-canvas');
-    if (canvas) {
-        const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-    }
-}
 
-function drawVolumeProfile(chartData) {
-    if (!chartData.chart || !chartData.candleSeries) return;
-    if (chartData.indicators.vpvr === false || chartData.indicators.vpvrVisible === false) {
-        clearVolumeProfile(chartData);
-        return;
-    }
-    const candles = chartData.cachedData;
-    if (!candles || candles.length === 0) return;
 
-    const canvas = _ensureVPCanvas(chartData);
-    if (!canvas) return;
 
-    const container = document.getElementById(`${chartData.id}-container`);
-    const rect = container.getBoundingClientRect();
-    canvas.width  = rect.width  * window.devicePixelRatio;
-    canvas.height = rect.height * window.devicePixelRatio;
-    canvas.style.width  = rect.width  + 'px';
-    canvas.style.height = rect.height + 'px';
 
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.save();
-    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-
-    // Use only visible candles for VPVR (visible range)
-    let visibleCandles = candles;
-    try {
-        const lr = chartData.chart.timeScale().getVisibleLogicalRange();
-        if (lr) {
-            const from = Math.max(0, Math.floor(lr.from));
-            const to   = Math.min(candles.length - 1, Math.ceil(lr.to));
-            if (to > from) visibleCandles = candles.slice(from, to + 1);
-        }
-    } catch(e) {}
-
-    // Price range from visible candles
-    const priceHigh = Math.max(...visibleCandles.map(c => c.high));
-    const priceLow  = Math.min(...visibleCandles.map(c => c.low));
-    if (priceHigh <= priceLow) { ctx.restore(); return; }
-
-    const bucketSize = (priceHigh - priceLow) / VP_BUCKETS;
-
-    // Initialise buckets
-    const buy  = new Float64Array(VP_BUCKETS);
-    const sell = new Float64Array(VP_BUCKETS);
-
-    // Distribute volume uniformly between low and high of each candle
-    for (const c of visibleCandles) {
-        const vol  = c.volume || 0;
-        if (vol <= 0) continue;
-        const isBuy = c.close >= c.open;
-        const lo = Math.min(c.low,  priceHigh); // clamp
-        const hi = Math.min(c.high, priceHigh);
-        const bStart = Math.max(0, Math.floor((lo - priceLow) / bucketSize));
-        const bEnd   = Math.min(VP_BUCKETS - 1, Math.floor((hi - priceLow) / bucketSize));
-        const spread = Math.max(1, bEnd - bStart + 1);
-        const perBucket = vol / spread;
-        for (let b = bStart; b <= bEnd; b++) {
-            if (isBuy)  buy[b]  += perBucket;
-            else        sell[b] += perBucket;
-        }
-    }
-
-    // Totals & max for scaling
-    const total = new Float64Array(VP_BUCKETS);
-    let maxVol = 0, pocIdx = 0;
-    for (let b = 0; b < VP_BUCKETS; b++) {
-        total[b] = buy[b] + sell[b];
-        if (total[b] > maxVol) { maxVol = total[b]; pocIdx = b; }
-    }
-    if (maxVol === 0) { ctx.restore(); return; }
-
-    // Chart geometry — right-aligned, inside price scale area
-    let rightScaleW = 50;
-    try {
-        const w = chartData.chart.priceScale('right').width();
-        if (w > 10 && w < 200) rightScaleW = w;
-    } catch(e) {}
-    const maxBarW = rect.width * VP_WIDTH_PCT;
-    const barRight = rect.width - rightScaleW; // bars end at left edge of price scale
-
-    ctx.globalAlpha = VP_OPACITY;
-
-    for (let b = 0; b < VP_BUCKETS; b++) {
-        if (total[b] === 0) continue;
-
-        const bucketPrice = priceLow + b * bucketSize;
-        const bucketPriceTop = bucketPrice + bucketSize;
-
-        const yBot = chartData.candleSeries.priceToCoordinate(bucketPrice);
-        const yTop = chartData.candleSeries.priceToCoordinate(bucketPriceTop);
-        if (yBot === null || yTop === null) continue;
-
-        const barH = Math.max(1, Math.abs(yBot - yTop) - 0.5);
-        const yDraw = Math.min(yBot, yTop);
-
-        const totalW = (total[b] / maxVol) * maxBarW;
-        const buyW   = (buy[b]  / maxVol) * maxBarW;
-
-        // Sell (red) portion
-        if (sell[b] > 0) {
-            ctx.fillStyle = VP_SELL_COLOR;
-            ctx.fillRect(barRight - totalW, yDraw, totalW - buyW, barH);
-        }
-        // Buy (green) portion on top
-        if (buy[b] > 0) {
-            ctx.fillStyle = VP_BUY_COLOR;
-            ctx.fillRect(barRight - buyW, yDraw, buyW, barH);
-        }
-    }
-
-    // POC line — horizontal yellow dash across the full bar
-    const pocPrice = priceLow + pocIdx * bucketSize + bucketSize / 2;
-    chartData.vpvrPocPrice = pocPrice;
-    const pocY = chartData.candleSeries.priceToCoordinate(pocPrice);
-    if (pocY !== null) {
-        ctx.globalAlpha = 1;
-        ctx.strokeStyle = VP_POC_COLOR;
-        ctx.lineWidth = 1.5;
-        ctx.setLineDash([4, 3]);
-        ctx.beginPath();
-        ctx.moveTo(barRight - maxBarW, pocY);
-        ctx.lineTo(barRight, pocY);
-        ctx.stroke();
-        ctx.setLineDash([]);
-
-        // POC label
-        ctx.font = 'bold 9px Inter, sans-serif';
-        ctx.fillStyle = VP_POC_COLOR;
-        ctx.textAlign = 'right';
-        ctx.textBaseline = 'middle';
-        ctx.fillText('POC', barRight - maxBarW - 2, pocY);
-    }
-
-    ctx.restore();
-
-    // Re-subscribe to time/price scale changes to keep VP in sync with panning/zooming
-    if (!chartData._vpSubscribed) {
-        chartData._vpSubscribed = true;
-        chartData.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-            if (chartData.indicators.vpvr) drawVolumeProfile(chartData);
-        });
-        // Watch container resize
-        if (!chartData._vpResizeObs) {
-            chartData._vpResizeObs = new ResizeObserver(() => {
-                if (chartData.indicators.vpvr) drawVolumeProfile(chartData);
-            });
-            chartData._vpResizeObs.observe(container);
-        }
-    }
-}
 
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -6249,205 +5143,11 @@ function drawVolumeProfile(chartData) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 
-function _ensureSessionCanvas(chartData) {
-    const container = document.getElementById(`${chartData.id}-container`);
-    if (!container) return null;
-    let canvas = container.querySelector('.session-canvas');
-    if (!canvas) {
-        canvas = document.createElement('canvas');
-        canvas.className = 'session-canvas';
-        canvas.style.cssText = `
-            position:absolute; top:0; left:0; width:100%; height:100%;
-            pointer-events:none; z-index:5;
-        `;
-        container.appendChild(canvas);
-    }
-    return canvas;
-}
 
-function clearSessionBands(chartData) {
-    const container = document.getElementById(`${chartData.id}-container`);
-    if (!container) return;
-    const canvas = container.querySelector('.session-canvas');
-    if (canvas) {
-        const ctx = canvas.getContext('2d');
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-    }
-}
 
-function drawSessionBands(chartData) {
-    if (!chartData.chart || !chartData.cachedData || chartData.cachedData.length === 0) return;
-    if (chartData.indicators.sessions === false || chartData.indicators.sessionsVisible === false) {
-        clearSessionBands(chartData);
-        return;
-    }
 
-    // Only draw for appropriate timeframes
-    if (!SESSION_MIN_INTERVALS.includes(chartData.interval)) {
-        clearSessionBands(chartData);
-        return;
-    }
 
-    const canvas = _ensureSessionCanvas(chartData);
-    if (!canvas) return;
 
-    const container = document.getElementById(`${chartData.id}-container`);
-    const rect = container.getBoundingClientRect();
-    canvas.width  = rect.width  * window.devicePixelRatio;
-    canvas.height = rect.height * window.devicePixelRatio;
-    canvas.style.width  = rect.width  + 'px';
-    canvas.style.height = rect.height + 'px';
-
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.save();
-    ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-
-    const timeScale = chartData.chart.timeScale();
-    const candles   = chartData.cachedData;
-
-    // Get visible logical range
-    let from = 0, to = candles.length - 1;
-    try {
-        const lr = timeScale.getVisibleLogicalRange();
-        if (lr) {
-            from = Math.max(0, Math.floor(lr.from));
-            to   = Math.min(candles.length - 1, Math.ceil(lr.to));
-        }
-    } catch(e) {}
-
-    // Build a set of unique calendar dates visible on screen
-    const seenDates = new Set();
-    for (let i = from; i <= to; i++) {
-        const c = candles[i];
-        if (!c) continue;
-        const tMs = typeof c.time === 'object'
-            ? Date.UTC(c.time.year, c.time.month - 1, c.time.day)
-            : c.time * 1000;
-        const d = new Date(tMs);
-        const key = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
-        seenDates.add(key);
-    }
-
-    // For each visible date, draw session bands + boundary markers
-    const nowSec = Date.now() / 1000;
-    // Extrapolate the x-pixel for "now" — timeToCoordinate(now) returns null
-    // in the rightOffset gap, so we calculate it from the candle bar spacing.
-    let chartRight = rect.width - 60; // safe fallback
-    if (candles.length >= 2) {
-        const cA = candles[candles.length - 2];
-        const cB = candles[candles.length - 1];
-        const tA = typeof cA.time === 'object'
-            ? Date.UTC(cA.time.year, cA.time.month - 1, cA.time.day) / 1000 : cA.time;
-        const tB = typeof cB.time === 'object'
-            ? Date.UTC(cB.time.year, cB.time.month - 1, cB.time.day) / 1000 : cB.time;
-        const xA = timeScale.timeToCoordinate(tA);
-        const xB = timeScale.timeToCoordinate(tB);
-        if (xA !== null && xB !== null && tB > tA) {
-            const pxPerSec = (xB - xA) / (tB - tA);
-            chartRight = xB + (nowSec - tB) * pxPerSec;
-        }
-    }
-
-    for (const dateKey of seenDates) {
-        const [y, m, d] = dateKey.split('-').map(Number);
-
-        for (const session of SESSIONS) {
-            const startUtc = Date.UTC(y, m, d, session.startH, 0, 0) / 1000;
-            const endUtc   = Date.UTC(y, m, d, session.endH,   0, 0) / 1000;
-
-            // Skip sessions entirely in the past or future (outside chart window)
-            if (endUtc < (candles[from] ? (typeof candles[from].time === 'object'
-                ? Date.UTC(candles[from].time.year, candles[from].time.month - 1, candles[from].time.day) / 1000
-                : candles[from].time) : 0)) continue;
-
-            const x1Raw = timeScale.timeToCoordinate(startUtc);
-            const x2Raw = timeScale.timeToCoordinate(endUtc);
-
-            // If the session is entirely off-screen (both null) skip it —
-            // UNLESS it is currently active (spans the right edge into the future)
-            const isActive = startUtc <= nowSec && endUtc >= nowSec;
-            if (x1Raw === null && x2Raw === null && !isActive) continue;
-
-            // Clamp off-screen edges:
-            //  • start off left  → clamp to 0
-            //  • end off right (future) → clamp to chart right edge
-            const left  = x1Raw !== null ? x1Raw : 0;
-            const right = x2Raw !== null ? x2Raw : chartRight;
-            const width = right - left;
-            if (width < 1) continue;
-
-            // ── Background shading ────────────────────────────────────────
-            ctx.fillStyle = session.color;
-            ctx.fillRect(left, 0, width, rect.height);
-
-            // ── Vertical dashed boundary line at session OPEN ─────────────
-            // (only draw if the open is actually visible on screen)
-            if (x1Raw !== null) {
-                const lineColor = session.color.replace('0.06', '0.5');
-                ctx.save();
-                ctx.strokeStyle = lineColor;
-                ctx.lineWidth = 1;
-                ctx.setLineDash([3, 4]);
-                ctx.beginPath();
-                ctx.moveTo(left, 0);
-                ctx.lineTo(left, rect.height);
-                ctx.stroke();
-                ctx.setLineDash([]);
-                ctx.restore();
-            }
-
-            // ── Pill label just above the time axis (bottom of chart) ─────
-            if (width > 28) {
-                const pillH   = 14;
-                const pillY   = rect.height - pillH - 2;
-                const pillPad = 5;
-                const label   = isActive ? `${session.name} ●` : session.name;
-
-                ctx.font = `bold 8px Inter, sans-serif`;
-                ctx.textAlign = 'left';
-                ctx.textBaseline = 'middle';
-                const textW = ctx.measureText(label).width;
-                const pillW = textW + pillPad * 2;
-
-                // Anchor pill at start of session (clamp to avoid overflow)
-                const pillX = Math.max(2, Math.min(left + 2, rect.width - pillW - 4));
-
-                // Pill background
-                const bgColor = session.color.replace('0.06', isActive ? '0.32' : '0.22');
-                ctx.fillStyle = bgColor;
-                ctx.beginPath();
-                ctx.roundRect(pillX, pillY, pillW, pillH, 3);
-                ctx.fill();
-
-                // Pill border (brighter for active session)
-                ctx.strokeStyle = session.color.replace('0.06', isActive ? '0.85' : '0.55');
-                ctx.lineWidth = isActive ? 1.2 : 0.8;
-                ctx.stroke();
-
-                // Pill text
-                ctx.fillStyle = session.color.replace('0.06', '0.95');
-                ctx.fillText(label, pillX + pillPad, pillY + pillH / 2);
-            }
-        }
-    }
-
-    ctx.restore();
-
-    // Subscribe to time scale changes once
-    if (!chartData._sessSubscribed) {
-        chartData._sessSubscribed = true;
-        chartData.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
-            if (chartData.indicators.sessions) drawSessionBands(chartData);
-        });
-        if (!chartData._sessResizeObs) {
-            chartData._sessResizeObs = new ResizeObserver(() => {
-                if (chartData.indicators.sessions) drawSessionBands(chartData);
-            });
-            chartData._sessResizeObs.observe(container);
-        }
-    }
-}
 
 /* ═══════════════════════════════════════════════════════════════
    NEW FEATURES
@@ -6627,423 +5327,6 @@ function getCryptoIconHtml(symbol) {
     return `<div class="wl-coin-icon" style="background: ${bg};">${char}</div>`;
 }
 
-function loadWatchlistFromStorage() {
-    let saved = StorageService.getWatchlistSymbols();
-    if (saved) {
-        try {
-            return JSON.parse(saved);
-        } catch(e) {}
-    }
-    // Default initial list
-    const defaults = ['BTC', 'ETH', 'SOL', 'TURBO'];
-    if (state && state.charts) {
-        Object.values(state.charts).forEach(cd => {
-            if (cd.symbol && cd.symbol !== 'none' && cd.symbol !== 'No Chart') {
-                if (!defaults.includes(cd.symbol)) defaults.push(cd.symbol);
-            }
-        });
-    }
-    return defaults;
-}
-
-function saveWatchlistToStorage(symbolsList) {
-    StorageService.saveWatchlistSymbols(symbolsList);
-}
-
-function toggleWatchlistSymbol(symbol) {
-    if (!watchlistState || !watchlistState.symbolsList) return;
-    const idx = watchlistState.symbolsList.indexOf(symbol);
-    if (idx === -1) {
-        watchlistState.symbolsList.push(symbol);
-    } else {
-        watchlistState.symbolsList.splice(idx, 1);
-        delete watchlistState.symbols[symbol];
-    }
-    saveWatchlistToStorage(watchlistState.symbolsList);
-    refreshWatchlistFromCharts();
-    syncAllWatchlistBtns();
-}
-
-function syncAllWatchlistBtns() {
-    const list = (watchlistState && watchlistState.symbolsList) || [];
-    // Sync all eye buttons — option-watchlist-btn, pane-watchlist-btn, ticker-watchlist-btn
-    document.querySelectorAll('[data-symbol][class*="watchlist-btn"]').forEach(btn => {
-        const sym = btn.dataset.symbol;
-        if (!sym) return;
-        const inList = list.includes(sym);
-        btn.classList.toggle('wl-active', inList);
-        btn.title = inList ? 'Remove from Watchlist' : 'Add to Watchlist';
-    });
-    // Pane watchlist buttons carry the chart's current symbol via data-chart-id
-    document.querySelectorAll('.pane-watchlist-btn[data-chart-id]').forEach(btn => {
-        const chartId = btn.dataset.chartId;
-        const cd = state && state.charts && state.charts[chartId];
-        const sym = cd && cd.symbol;
-        if (!sym || sym === 'none') return;
-        const inList = list.includes(sym);
-        btn.classList.toggle('wl-active', inList);
-        btn.title = inList ? 'Remove from Watchlist' : 'Add to Watchlist';
-    });
-}
-
-function initWatchlistPanel() {
-    const panel  = document.getElementById('watchlist-panel');
-    const toggleBtn = document.getElementById('watchlist-toggle-btn');
-    const closeBtn  = document.getElementById('watchlist-close-btn');
-    const bellBtn   = document.getElementById('notif-bell-btn');
-    if (!panel || !toggleBtn) return;
-
-    // Load initial list from storage
-    watchlistState.symbolsList = loadWatchlistFromStorage();
-
-    // Restore open state
-    const savedOpen = StorageService.getWatchlistOpen();
-    if (savedOpen) openWatchlist();
-
-    toggleBtn.addEventListener('click', () => {
-        if (watchlistState.open) closeWatchlist();
-        else openWatchlist();
-    });
-
-    if (closeBtn) {
-        closeBtn.addEventListener('click', closeWatchlist);
-    }
-
-    if (bellBtn) {
-        bellBtn.addEventListener('click', () => {
-            showAlertsHub();
-        });
-    }
-
-    // ── Watchlist Search Dropdown ──────────────────────────────
-    const addInput    = document.getElementById('watchlist-add-input');
-    const searchDrop  = document.getElementById('wl-search-dropdown');
-    let wlHighlight   = -1;
-
-    const addSymbolToWatchlist = (symbol) => {
-        const sym = symbol.trim().toUpperCase();
-        if (!sym) return;
-        if (!watchlistState.symbolsList.includes(sym)) {
-            watchlistState.symbolsList.push(sym);
-            saveWatchlistToStorage(watchlistState.symbolsList);
-            refreshWatchlistFromCharts();
-        }
-        addInput.value = '';
-        searchDrop.innerHTML = '';
-        searchDrop.classList.remove('show');
-        wlHighlight = -1;
-    };
-
-    const renderWlOptions = (filter) => {
-        if (!state.instruments || state.instruments.length === 0) return;
-        const q = filter.toLowerCase();
-        const results = state.instruments.filter(item =>
-            item.symbol.toLowerCase().includes(q) ||
-            (item.name && item.name.toLowerCase().includes(q))
-        ).slice(0, 40);
-
-        if (results.length === 0) {
-            searchDrop.innerHTML = `<div class="wl-search-no-results">No matches for "${filter}"</div>`;
-        } else {
-            searchDrop.innerHTML = results.map(item => `
-                <div class="wl-search-option" data-symbol="${item.symbol}">
-                    <span class="wl-search-option-symbol">${item.symbol}</span>
-                    <span class="wl-search-option-name">${item.name || 'USDT Perp'}</span>
-                    <button class="wl-search-option-add" data-symbol="${item.symbol}" tabindex="-1">+ Add</button>
-                </div>
-            `).join('');
-        }
-        wlHighlight = -1;
-
-        // Option click
-        searchDrop.querySelectorAll('.wl-search-option').forEach(opt => {
-            opt.addEventListener('mousedown', (e) => {
-                e.preventDefault();
-                const sym = opt.dataset.symbol;
-                if (sym) addSymbolToWatchlist(sym);
-            });
-        });
-        // Add button click
-        searchDrop.querySelectorAll('.wl-search-option-add').forEach(btn => {
-            btn.addEventListener('mousedown', (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                const sym = btn.dataset.symbol;
-                if (sym) addSymbolToWatchlist(sym);
-            });
-        });
-    };
-
-    if (addInput) {
-        addInput.addEventListener('input', () => {
-            const q = addInput.value.trim();
-            if (q.length > 0) {
-                renderWlOptions(q);
-                searchDrop.classList.add('show');
-            } else {
-                searchDrop.innerHTML = '';
-                searchDrop.classList.remove('show');
-                wlHighlight = -1;
-            }
-        });
-
-        addInput.addEventListener('focus', () => {
-            if (addInput.value.trim().length > 0) {
-                searchDrop.classList.add('show');
-            }
-        });
-
-        addInput.addEventListener('blur', () => {
-            setTimeout(() => {
-                searchDrop.classList.remove('show');
-            }, 150);
-        });
-
-        addInput.addEventListener('keydown', (e) => {
-            const opts = searchDrop.querySelectorAll('.wl-search-option');
-            if (e.key === 'ArrowDown') {
-                e.preventDefault();
-                wlHighlight = Math.min(wlHighlight + 1, opts.length - 1);
-                opts.forEach((o, i) => o.classList.toggle('highlighted', i === wlHighlight));
-                if (opts[wlHighlight]) opts[wlHighlight].scrollIntoView({ block: 'nearest' });
-            } else if (e.key === 'ArrowUp') {
-                e.preventDefault();
-                wlHighlight = Math.max(wlHighlight - 1, 0);
-                opts.forEach((o, i) => o.classList.toggle('highlighted', i === wlHighlight));
-                if (opts[wlHighlight]) opts[wlHighlight].scrollIntoView({ block: 'nearest' });
-            } else if (e.key === 'Enter') {
-                e.preventDefault();
-                if (wlHighlight >= 0 && opts[wlHighlight]) {
-                    addSymbolToWatchlist(opts[wlHighlight].dataset.symbol);
-                } else if (addInput.value.trim()) {
-                    addSymbolToWatchlist(addInput.value);
-                }
-            } else if (e.key === 'Escape') {
-                searchDrop.classList.remove('show');
-                addInput.blur();
-            }
-        });
-    }
-
-    // Populate watchlist from charts after a brief delay (charts may still be initializing)
-    setTimeout(refreshWatchlistFromCharts, 1500);
-}
-
-function openWatchlist() {
-    const panel = document.getElementById('watchlist-panel');
-    const btn   = document.getElementById('watchlist-toggle-btn');
-    if (!panel || !btn) return;
-
-    panel.classList.add('open');
-    btn.classList.add('active');
-    watchlistState.open = true;
-    StorageService.saveWatchlistOpen(true);
-}
-
-function closeWatchlist() {
-    const panel = document.getElementById('watchlist-panel');
-    const btn   = document.getElementById('watchlist-toggle-btn');
-    if (!panel || !btn) return;
-
-    panel.classList.remove('open');
-    btn.classList.remove('active');
-    watchlistState.open = false;
-    StorageService.saveWatchlistOpen(false);
-}
-
-function updateWatchlistFromMarketCache() {
-    if (!state.allMarketPrices || !watchlistState || !watchlistState.symbols) return;
-    
-    Object.keys(watchlistState.symbols).forEach(symbol => {
-        const entry = watchlistState.symbols[symbol];
-        if (!entry || !entry.el) return;
-        
-        const cached = state.allMarketPrices[symbol];
-        if (cached) {
-            const prevPrice = entry.price;
-            entry.price = cached.price;
-            entry.change24h = cached.change;
-            
-            updateWatchlistRowPrice(symbol, cached.price, prevPrice, true);
-            
-            const el = entry.el;
-            const chEl = el.querySelector('.wl-change');
-            if (chEl) {
-                const sign = cached.change >= 0 ? '+' : '';
-                chEl.textContent = `${sign}${cached.change.toFixed(2)}%`;
-                chEl.className = `wl-change ${cached.change >= 0 ? 'up' : 'down'}`;
-            }
-        }
-    });
-}
-
-function refreshWatchlistFromCharts() {
-    if (!state || !state.charts) return;
-
-    const body = document.getElementById('watchlist-body');
-    if (!body) return;
-    body.innerHTML = '';
-
-    const symbols = watchlistState.symbolsList;
-    if (!symbols || symbols.length === 0) {
-        body.innerHTML = `
-            <div class="watchlist-empty">
-                <p>Watchlist is empty</p>
-            </div>
-        `;
-        return;
-    }
-
-    symbols.forEach(symbol => {
-        const row = createWatchlistRow(symbol);
-        body.appendChild(row);
-        watchlistState.symbols[symbol] = watchlistState.symbols[symbol] || { price: null, change24h: null };
-        watchlistState.symbols[symbol].el = row;
-    });
-
-    // Seed initial prices / change from cache or active chart states
-    symbols.forEach(symbol => {
-        const entry = watchlistState.symbols[symbol];
-        
-        if (state.allMarketPrices && state.allMarketPrices[symbol]) {
-            const cached = state.allMarketPrices[symbol];
-            entry.price = cached.price;
-            entry.change24h = cached.change;
-            updateWatchlistRowPrice(symbol, cached.price, null, false);
-            
-            const el = entry.el;
-            if (el) {
-                const chEl = el.querySelector('.wl-change');
-                if (chEl) {
-                    const sign = cached.change >= 0 ? '+' : '';
-                    chEl.textContent = `${sign}${cached.change.toFixed(2)}%`;
-                    chEl.className = `wl-change ${cached.change >= 0 ? 'up' : 'down'}`;
-                }
-            }
-        } else {
-            const matchingChart = Object.values(state.charts).find(cd => cd.symbol === symbol);
-            if (matchingChart) {
-                if (matchingChart.lastPrice !== null && matchingChart.lastPrice !== undefined) {
-                    entry.price = matchingChart.lastPrice;
-                    updateWatchlistRowPrice(symbol, matchingChart.lastPrice, null, false);
-                }
-                if (matchingChart.cachedData && matchingChart.cachedData.length > 0) {
-                    const opens = matchingChart.cachedData.find(c => {
-                        const now = matchingChart.cachedData[matchingChart.cachedData.length - 1].time;
-                        return Math.abs(c.time - (now - 86400)) < 3600;
-                    });
-                    if (opens && matchingChart.lastPrice) {
-                        const change = ((matchingChart.lastPrice - opens.close) / opens.close) * 100;
-                        entry.change24h = change;
-                        const el = entry.el;
-                        if (el) {
-                            const chEl = el.querySelector('.wl-change');
-                            if (chEl) {
-                                const sign = change >= 0 ? '+' : '';
-                                chEl.textContent = `${sign}${change.toFixed(2)}%`;
-                                chEl.className = `wl-change ${change >= 0 ? 'up' : 'down'}`;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    });
-}
-
-function createWatchlistRow(symbol) {
-    const row = document.createElement('div');
-    row.className = 'watchlist-row';
-    row.dataset.symbol = symbol;
-    row.setAttribute('title', `Load ${symbol}`);
-
-    row.innerHTML = `
-        <div class="wl-left">
-            ${getCryptoIconHtml(symbol)}
-            <div class="wl-symbol-details">
-                <span class="wl-symbol">${symbol}</span>
-                <span class="wl-name">USDT Perp</span>
-            </div>
-        </div>
-        <div class="wl-right">
-            <span class="wl-price" id="wl-price-${symbol}">—</span>
-            <span class="wl-change" id="wl-change-${symbol}">—</span>
-            <button class="wl-remove-btn" title="Remove from Watchlist">&times;</button>
-        </div>
-    `;
-
-    row.addEventListener('click', () => {
-        const activeId = state && state.activeChartId;
-        if (activeId) {
-            switchChartSymbol(activeId, symbol);
-        } else if (state && state.charts) {
-            // Fall back to the first chart
-            const firstId = Object.keys(state.charts)[0];
-            if (firstId) switchChartSymbol(firstId, symbol);
-        }
-
-        // Highlight active row
-        document.querySelectorAll('.watchlist-row').forEach(r => r.classList.remove('active-wl'));
-        row.classList.add('active-wl');
-    });
-
-    const removeBtn = row.querySelector('.wl-remove-btn');
-    if (removeBtn) {
-        removeBtn.addEventListener('click', (e) => {
-            e.stopPropagation();
-            watchlistState.symbolsList = watchlistState.symbolsList.filter(s => s !== symbol);
-            saveWatchlistToStorage(watchlistState.symbolsList);
-            delete watchlistState.symbols[symbol];
-            refreshWatchlistFromCharts();
-        });
-    }
-
-    return row;
-}
-
-// Called from applyPriceUpdate to keep watchlist live
-function updateWatchlistRowPrice(symbol, price, prevPrice = null, doFlash = true) {
-    const entry = watchlistState.symbols[symbol];
-    if (!entry || !entry.el) return;
-
-    const priceEl = entry.el.querySelector('.wl-price');
-    if (!priceEl) return;
-
-    const fmt = price < 1 ? price.toFixed(4) : price < 1000 ? price.toFixed(2) : price.toFixed(0);
-    priceEl.textContent = fmt;
-
-    if (doFlash && prevPrice !== null) {
-        const dir = price >= prevPrice ? 'up' : 'down';
-        priceEl.classList.remove('flash-up', 'flash-down');
-        void priceEl.offsetWidth; // reflow to restart animation
-        priceEl.classList.add(`flash-${dir}`);
-    }
-}
-
-// Hook into the existing applyPriceUpdate to feed the watchlist
-const _origApplyPriceUpdate = window.applyPriceUpdate;
-// We monkey-patch after the file loads via a deferred approach
-function _patchApplyPriceUpdate() {
-    // applyPriceUpdate is defined in the outer scope, not on window
-    // Instead we hook into the flushChartUpdate path via the state
-    // Simpler: poll chart prices every 500ms for watchlist
-    setInterval(() => {
-        if (!state || !state.charts) return;
-        Object.values(state.charts).forEach(cd => {
-            if (!cd.symbol || !watchlistState.symbols[cd.symbol]) return;
-            const entry = watchlistState.symbols[cd.symbol];
-            const newPrice = cd.lastPrice;
-            if (newPrice !== null && newPrice !== undefined && newPrice !== entry.price) {
-                const prev = entry.price;
-                entry.price = newPrice;
-                updateWatchlistRowPrice(cd.symbol, newPrice, prev, true);
-            }
-        });
-        // Also update badge
-        updateNotifBadge();
-    }, 500);
-}
-
 // ── 3. Chart Right-Click Context Menu ────────────────────────────
 const ctxMenu = {
     el: null,
@@ -7218,22 +5501,31 @@ function attachChartContextMenu(chartData) {
 
 // ── Bootstrap all new features once DOM is ready ────────────────
 function initNewFeatures() {
-    initWatchlistPanel();
+    WatchlistService.initialize({
+        watchlistState: watchlistState,
+        StorageService: StorageService,
+        getInstruments: () => state.instruments,
+        getMarketCache: () => state.allMarketPrices,
+        getChartStates: () => state.charts,
+        getActiveChartId: () => state.activeChartId,
+        onSelectSymbol: (chartId, symbol) => switchChartSymbol(chartId, symbol),
+        onOpenAlerts: () => { if (typeof showAlertsHub === 'function') showAlertsHub(); },
+        getIconHtml: (symbol) => typeof getCryptoIconHtml === 'function' ? getCryptoIconHtml(symbol) : '',
+        onPoll: () => { if (typeof updateNotifBadge === 'function') updateNotifBadge(); }
+    });
+
     initContextMenu();
-    _patchApplyPriceUpdate();
 
     // Watch for charts being added/changed to refresh watchlist
     let wlRefreshTimer = null;
     const scheduleWLRefresh = () => {
         clearTimeout(wlRefreshTimer);
-        wlRefreshTimer = setTimeout(refreshWatchlistFromCharts, 1200);
+        wlRefreshTimer = setTimeout(WatchlistService.refreshWatchlistFromCharts, 1200);
     };
 
-    // Re-hook whenever charts change (layout switch, symbol change)
     if (state) {
         const origSaveLayout = typeof saveLayoutState === 'function' ? saveLayoutState : null;
         if (origSaveLayout) {
-            // Observe layout saves (symbol changes, grid changes)
             const _orig = window.saveLayoutState;
         }
     }
