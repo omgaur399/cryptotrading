@@ -1,0 +1,142 @@
+function buildReplayUI(chartId) {
+    let panel = document.getElementById(`replay-toolbar-${chartId}`);
+    if (!panel) {
+        panel = document.createElement("div");
+        panel.id = `replay-toolbar-${chartId}`;
+        panel.className = "replay-toolbar-embedded";
+        panel.style.cssText = `
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            top: auto !important;
+            height: fit-content !important;
+            min-height: unset !important;
+            width: max-content;
+            max-width: 95%;
+            transform: translateX(-50%) scale(0.75);
+            transform-origin: bottom center;
+            background: #1e293b;
+            border: 1px solid #3b82f6;
+            padding: 8px 12px;
+            border-radius: 8px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            color: white;
+            font-family: inherit;
+        `;
+        const container = document.getElementById(`${chartId}-container`);
+        if (container) {
+            container.appendChild(panel);
+        } else {
+            document.body.appendChild(panel);
+        }
+    }
+    
+    panel.innerHTML = `
+        <button id="${chartId}-replay-play" class="theme-btn" style="background: #10b981; border: none; padding: 6px 10px;">▶ Play</button>
+        <button id="${chartId}-replay-pause" class="theme-btn" style="background: #f59e0b; border: none; padding: 6px 10px; display: none;">⏸ Pause</button>
+        <button id="${chartId}-replay-step-back" class="theme-btn" title="Step Back">⏮</button>
+        <button id="${chartId}-replay-step-fwd" class="theme-btn" title="Step Forward">⏭</button>
+        <button id="${chartId}-replay-jump-back" class="theme-btn" title="Jump Back 10">-10</button>
+        <button id="${chartId}-replay-jump-fwd" class="theme-btn" title="Jump Forward 10">+10</button>
+        <select id="${chartId}-replay-speed" class="theme-btn" title="Replay Speed" style="padding: 4px;">
+            <option value="0.25">0.25x</option>
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="5">5x</option>
+            <option value="10">10x</option>
+            <option value="25">25x</option>
+            <option value="50">50x</option>
+        </select>
+        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 2px;"></div>
+        <button id="${chartId}-replay-buy" class="theme-btn" style="background: #10b981; border: none; padding: 6px 10px;">Buy</button>
+        <button id="${chartId}-replay-sell" class="theme-btn" style="background: #ef4444; border: none; padding: 6px 10px;">Sell</button>
+        <button id="${chartId}-replay-close" class="theme-btn" style="background: #394654; border: none; padding: 6px 10px;">Close</button>
+        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 2px;"></div>
+        <div style="display: flex; flex-direction: column; font-size: 11px; line-height: 1.2;">
+            <span style="color:#8b9bb0">OHM: <span id="${chartId}-replay-bal" style="color:white;font-weight:bold;">100,000</span></span>
+            <span style="color:#8b9bb0">PnL: <span id="${chartId}-replay-pnl" style="font-weight:bold;">0.00</span></span>
+        </div>
+        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 2px;"></div>
+        <button id="${chartId}-replay-stats-toggle" class="theme-btn" style="background: #3b82f6; border: none; padding: 6px 10px;">📊 Stats</button>
+        <button id="${chartId}-replay-exit" class="theme-btn" style="background: #ef4444; border: none; padding: 6px 10px;">Exit</button>
+    `;
+    
+    document.getElementById(`${chartId}-replay-play`).onclick = () => {
+        const chartData = state.charts[chartId];
+        if (chartData && chartData.replay) {
+            chartData.replay.isPlaying = true;
+            document.getElementById(`${chartId}-replay-play`).style.display = "none";
+            document.getElementById(`${chartId}-replay-pause`).style.display = "inline-block";
+            ReplayService.runLoop(chartData, 
+                () => onReplayFrameRendered(chartData),
+                () => {
+                    document.getElementById(`${chartId}-replay-pause`).click();
+                    alert("End of historical data reached.");
+                }
+            );
+        }
+    };
+    
+    document.getElementById(`${chartId}-replay-pause`).onclick = () => {
+        const chartData = state.charts[chartId];
+        if (chartData && chartData.replay) {
+            chartData.replay.isPlaying = false;
+            document.getElementById(`${chartId}-replay-play`).style.display = "inline-block";
+            document.getElementById(`${chartId}-replay-pause`).style.display = "none";
+            if (chartData.replay.timer) clearTimeout(chartData.replay.timer);
+        }
+    };
+    
+    document.getElementById(`${chartId}-replay-step-back`).onclick = () => { 
+        const chartData = state.charts[chartId];
+        ReplayService.step(chartData, -1, () => onReplayFrameRendered(chartData)); 
+    };
+    document.getElementById(`${chartId}-replay-step-fwd`).onclick = () => { 
+        const chartData = state.charts[chartId];
+        ReplayService.step(chartData, 1, () => onReplayFrameRendered(chartData)); 
+    };
+    document.getElementById(`${chartId}-replay-jump-back`).onclick = () => { 
+        const chartData = state.charts[chartId];
+        ReplayService.step(chartData, -10, () => onReplayFrameRendered(chartData)); 
+    };
+    document.getElementById(`${chartId}-replay-jump-fwd`).onclick = () => { 
+        const chartData = state.charts[chartId];
+        ReplayService.step(chartData, 10, () => onReplayFrameRendered(chartData)); 
+    };
+    
+    document.getElementById(`${chartId}-replay-speed`).onchange = (e) => {
+        const chartData = state.charts[chartId];
+        if (chartData && chartData.replay) {
+            chartData.replay.speed = parseFloat(e.target.value);
+        }
+    };
+    
+    document.getElementById(`${chartId}-replay-buy`).onclick = () => { 
+        ReplayService.PaperTrading.executeTrade(state.charts[chartId], 'Long');
+        onReplayFrameRendered(state.charts[chartId]);
+    };
+    document.getElementById(`${chartId}-replay-sell`).onclick = () => { 
+        ReplayService.PaperTrading.executeTrade(state.charts[chartId], 'Short');
+        onReplayFrameRendered(state.charts[chartId]);
+    };
+    document.getElementById(`${chartId}-replay-close`).onclick = () => { 
+        ReplayService.PaperTrading.closeAllTrades(state.charts[chartId]);
+        onReplayFrameRendered(state.charts[chartId]);
+    };
+    
+    document.getElementById(`${chartId}-replay-stats-toggle`).onclick = () => {
+        const p = document.getElementById(`replay-analytics-panel-${chartId}`);
+        if (p) p.style.display = p.style.display === "none" ? "block" : "none";
+    };
+    
+    document.getElementById(`${chartId}-replay-exit`).onclick = () => exitReplayMode(chartId);
+    
+    updateReplayAnalyticsPanel(chartId);
+}

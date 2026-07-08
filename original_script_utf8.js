@@ -456,7 +456,7 @@ async function initializeApp() {
         const backtestBtn = document.createElement("button");
         backtestBtn.id = "global-backtest-btn";
         backtestBtn.className = "theme-btn";
-        backtestBtn.textContent = "📊 Backtest";
+        backtestBtn.textContent = "≡ƒôè Backtest";
         backtestBtn.style.marginLeft = "12px";
         backtestBtn.onclick = openBacktestModal;
         chartCountEl.parentNode.appendChild(backtestBtn);
@@ -491,7 +491,7 @@ async function initializeApp() {
         themeBtn.id = "theme-toggle";
         themeBtn.className = "toolbar-btn";
         themeBtn.title = "Toggle Light/Dark Mode";
-        themeBtn.textContent = state.theme === "dark" ? "☀️" : "🌙";
+        themeBtn.textContent = state.theme === "dark" ? "ΓÿÇ∩╕Å" : "≡ƒîÖ";
         themeBtn.style.marginTop = "auto";
         themeBtn.style.marginBottom = "4px";
         themeBtn.onclick = toggleTheme;
@@ -521,7 +521,7 @@ async function initializeApp() {
             // Re-render grid without saved sizes (CSS defaults kick in)
             renderGrid();
             // Brief visual feedback
-            resetGridBtn.textContent = '✓ Reset';
+            resetGridBtn.textContent = 'Γ£ô Reset';
             resetGridBtn.style.color = 'var(--green)';
             setTimeout(() => {
                 resetGridBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Reset Grid`;
@@ -588,20 +588,20 @@ async function initializeApp() {
         const arrowEl = sidebarToggleBtn.querySelector(".sidebar-toggle-arrow");
         if (isCollapsed) {
             globalSidebar.classList.add("collapsed");
-            if (arrowEl) arrowEl.textContent = "◀";
+            if (arrowEl) arrowEl.textContent = "ΓùÇ";
         } else {
             globalSidebar.classList.remove("collapsed");
-            if (arrowEl) arrowEl.textContent = "▶";
+            if (arrowEl) arrowEl.textContent = "Γû╢";
         }
         
         sidebarToggleBtn.addEventListener("click", () => {
             const willCollapse = !globalSidebar.classList.contains("collapsed");
             if (willCollapse) {
                 globalSidebar.classList.add("collapsed");
-                if (arrowEl) arrowEl.textContent = "◀";
+                if (arrowEl) arrowEl.textContent = "ΓùÇ";
             } else {
                 globalSidebar.classList.remove("collapsed");
-                if (arrowEl) arrowEl.textContent = "▶";
+                if (arrowEl) arrowEl.textContent = "Γû╢";
                 // Refresh active chart data in sidebar on open
                 const activeChart = state.charts[state.activeChartId] || state.charts['chart-1'];
                 if (activeChart && activeChart.symbol !== 'none' && activeChart.symbol !== 'No Chart') {
@@ -1237,7 +1237,7 @@ function populatePaneControls(chartData) {
 
     if (replayToggleBtn) {
         replayToggleBtn.addEventListener("click", () => {
-            ReplayService.Controller.toggle(chartData.id);
+            toggleReplayMode(chartData.id);
         });
     }
 
@@ -1311,7 +1311,7 @@ function populatePaneControls(chartData) {
             const symbol = wlBtn.getAttribute("data-symbol");
             if (symbol) WatchlistService.toggleWatchlistSymbol(symbol);
             // syncAllWatchlistBtns() (called inside toggleWatchlistSymbol) already
-            // updates the wl-active class in-place — no need to re-render the dropdown
+            // updates the wl-active class in-place ΓÇö no need to re-render the dropdown
             return;
         }
 
@@ -1352,7 +1352,7 @@ function populatePaneControls(chartData) {
         
         if (wasReplaying) {
             chartData.replay.fullData = [...chartData.cachedData];
-            ReplayService.Controller.start(chartData.id, replayTime);
+            startReplayAt(chartData.id, replayTime);
         }
 
         saveLayoutState();
@@ -1418,7 +1418,7 @@ function populatePaneControls(chartData) {
                 e.target.options[indexMap[indicator]].text = textMap[indicator];
             }
         }
-        e.target.value = ""; // Reset the dropdown back to the "ƒx" placeholder
+        e.target.value = ""; // Reset the dropdown back to the "╞Æx" placeholder
         saveLayoutState();
     });
 }
@@ -1454,7 +1454,7 @@ function initializeChart(chartData) {
     // --- Custom Drag & Hover Overlay Logic ---
     const deleteBtn = document.createElement('div');
     deleteBtn.className = 'hover-delete-btn';
-    deleteBtn.innerHTML = '✖';
+    deleteBtn.innerHTML = 'Γ£û';
     deleteBtn.style.display = 'none';
     deleteBtn.title = 'Delete Line';
     container.appendChild(deleteBtn);
@@ -1462,7 +1462,7 @@ function initializeChart(chartData) {
 
     const addAlertBtn = document.createElement('div');
     addAlertBtn.className = 'hover-add-alert-btn';
-    addAlertBtn.innerHTML = '＋';
+    addAlertBtn.innerHTML = '∩╝ï';
     addAlertBtn.style.display = 'none';
     addAlertBtn.title = 'Add Alert';
     container.appendChild(addAlertBtn);
@@ -1670,7 +1670,7 @@ function initializeChart(chartData) {
                                 } else if (pl.applyOptions) {
                                     if (draggingLineInfo.line.type === 'alert') {
                                         draggingLineInfo.line.active = true;
-                                        pl.applyOptions({ price: newPrice, color: 'rgba(0, 0, 0, 0)', title: '🔔' });
+                                        pl.applyOptions({ price: newPrice, color: 'rgba(0, 0, 0, 0)', title: '≡ƒöö' });
                                     } else {
                                         pl.applyOptions({ price: newPrice });
                                     }
@@ -1922,7 +1922,7 @@ function initializeChart(chartData) {
                                 if (line.type === 'alert') {
                                     const lineY = chartData.candleSeries.priceToCoordinate(line.price);
                                     if (lineY !== null && Math.abs(y - lineY) < 15) {
-                                        AlertService.AlertModal.openSettings(chartData, line, key);
+                                        openAlertSettingsModal(chartData, line, key);
                                         return;
                                     }
                                 }
@@ -1955,7 +1955,7 @@ function initializeChart(chartData) {
                 const bTop = parseFloat(chartData.hoverAddAlertBtn.style.top);
                 if (x >= bLeft && x <= bLeft + 18 && y >= bTop && y <= bTop + 18) {
                     if (chartData.lastHoveredPrice !== null) {
-                        AlertService.AlertModal.open(chartData, chartData.lastHoveredPrice);
+                        openPriceAlertModal(chartData, chartData.lastHoveredPrice);
                     }
                     chartData.hoverAddAlertBtn.style.display = 'none';
                     e.stopPropagation();
@@ -2018,7 +2018,7 @@ function initializeChart(chartData) {
         if (x >= rect.width - rightScaleWidth) {
             const price = chartData.candleSeries.coordinateToPrice(y);
             if (price !== null) {
-                AlertService.AlertModal.open(chartData, price);
+                openPriceAlertModal(chartData, price);
             }
         } else {
             chartData.customPriceOffset = 0;
@@ -2033,7 +2033,7 @@ function initializeChart(chartData) {
         
         if (chartData.replay && chartData.replay.status === 'selecting') {
             if (param.time) {
-                ReplayService.Controller.start(chartData.id, param.time);
+                startReplayAt(chartData.id, param.time);
             }
             return;
         }
@@ -2076,7 +2076,7 @@ function initializeChart(chartData) {
                 }
             } else if (chartData.drawingMode === "priceAlert") {
                 if (price !== null) {
-                    AlertService.AlertModal.open(chartData, price);
+                    openPriceAlertModal(chartData, price);
                 }
             }
             
@@ -2411,10 +2411,155 @@ function updateMarkers(chartData) {
 
 
 
+function renderAlertLine(chartData, alertObj) {
+    DrawingService.renderAlertLine(chartData, alertObj);
+}
 
+function openPriceAlertModal(chartData, defaultPrice) {
+    const formattedPrice = defaultPrice < 1 ? defaultPrice.toPrecision(4) : defaultPrice.toFixed(2);
+    
+    window.ModalService.openPriceAlert({
+        price: formattedPrice
+    }, {
+        onSave: (data) => {
+            const price = parseFloat(data.price);
+            if (!isNaN(price)) {
+                const id = Date.now().toString() + Math.random().toString().slice(2, 6);
+                const alertObj = {
+                    type: 'alert',
+                    symbol: chartData.symbol,
+                    price: price,
+                    id: id,
+                    active: true
+                };
+                const key = chartData.symbol;
+                if (!state.drawings[key]) state.drawings[key] = [];
+                state.drawings[key].push(alertObj);
+                saveDrawings();
+                Object.values(state.charts).forEach(cd => {
+                    if (cd.symbol === chartData.symbol) renderAlertLine(cd, alertObj);
+                });
+                
+                if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
+                    Notification.requestPermission();
+                }
+            }
+            window.ModalService.closeModal("alert-settings-modal");
+        },
+        onCancel: () => {
+            window.ModalService.closeModal("alert-settings-modal");
+        }
+    });
+}
 
+function openAlertSettingsModal(chartData, alertObj, key) {
+    window.ModalService.openAlertSettings({
+        price: alertObj.price
+    }, {
+        onSave: (data) => {
+            const newPrice = parseFloat(data.price);
+            alertObj.price = isNaN(newPrice) ? alertObj.price : newPrice;
+            alertObj.active = true;
+            
+            Object.values(state.charts).forEach(cd => {
+                if (cd.symbol === chartData.symbol) {
+                    const priceLine = cd.renderedDrawings?.[alertObj.id];
+                    if (priceLine) {
+                        if (priceLine instanceof HTMLElement) {
+                            if (priceLine._updatePosition) priceLine._updatePosition();
+                        } else if (priceLine.applyOptions) {
+                            priceLine.applyOptions({
+                                price: alertObj.price,
+                                title: '≡ƒöö',
+                                color: 'rgba(0, 0, 0, 0)'
+                            });
+                        }
+                    }
+                }
+            });
+            saveDrawings();
+            window.ModalService.closeModal("alert-edit-modal");
+        },
+        onDelete: () => {
+            Object.values(state.charts).forEach(cd => {
+                if (cd.symbol === chartData.symbol) {
+                    const priceLine = cd.renderedDrawings?.[alertObj.id];
+                    if (priceLine) {
+                        if (priceLine instanceof HTMLElement) {
+                            priceLine.remove();
+                        } else {
+                            try { cd.candleSeries.removePriceLine(priceLine); } catch (e) {}
+                        }
+                        delete cd.renderedDrawings[alertObj.id];
+                    }
+                }
+            });
+            const idx = state.drawings[key].findIndex(l => l.id === alertObj.id);
+            if (idx !== -1) state.drawings[key].splice(idx, 1);
+            saveDrawings();
+            window.ModalService.closeModal("alert-edit-modal");
+        },
+        onCancel: () => {
+            window.ModalService.closeModal("alert-edit-modal");
+        }
+    });
+}
 
+function checkAlerts(chartData, currentPrice) {
+    if (chartData.lastPrice === null) return;
+    const prevPrice = chartData.lastPrice;
+    
+    const key = chartData.symbol;
+    const lines = state.drawings[key];
+    if (!lines) return;
+    
+    lines.forEach(line => {
+        if (line.type === 'alert' && line.active !== false) {
+            let triggered = false;
+            if ((prevPrice <= line.price && currentPrice > line.price) || (prevPrice >= line.price && currentPrice < line.price)) {
+                triggered = true;
+            }
+            
+            if (triggered) {
+                line.active = false;
+                saveDrawings();
+                showNotification(`Alert Triggered: ${chartData.symbol}`, `Price crossed ${line.price}. Current: ${currentPrice}`);
+                
+                Object.values(state.charts).forEach(cd => {
+                    if (cd.symbol === chartData.symbol) {
+                        const priceLine = cd.renderedDrawings?.[line.id];
+                        if (priceLine) {
+                            if (priceLine instanceof HTMLElement) {
+                                if (priceLine._updatePosition) priceLine._updatePosition();
+                            } else if (priceLine.applyOptions) {
+                                    priceLine.applyOptions({ color: 'rgba(0, 0, 0, 0)', title: '≡ƒöò' });
+                            }
+                        }
+                    }
+                });
+            }
+        }
+    });
+}
 
+function showNotification(title, body) {
+    if ("Notification" in window && Notification.permission === "granted") {
+        new Notification(title, { body: body });
+    }
+    
+    const popup = document.createElement("div");
+    popup.className = "alert-popup";
+    popup.innerHTML = `
+        <div style="font-weight: bold; margin-bottom: 4px;">${title}</div>
+        <div>${body}</div>
+    `;
+    document.body.appendChild(popup);
+    
+    setTimeout(() => {
+        popup.style.opacity = "0";
+        setTimeout(() => popup.remove(), 300);
+    }, 5000);
+}
 
 async function loadOlderHistoricalData(chartData) {
     if (chartData.isFetchingHistory || !chartData.cachedData || chartData.cachedData.length === 0) return;
@@ -2711,7 +2856,7 @@ function applyPriceUpdate(chartData, tick) {
     const volume = Number(tick.volume) || 0;
     if (!Number.isFinite(price) || !Number.isFinite(time)) return;
 
-    AlertService.AlertRenderer.check(chartData, price);
+    checkAlerts(chartData, price);
 
     const candle = buildRealtimeCandle(chartData, time, price, volume);
     
@@ -3282,45 +3427,45 @@ function updateChartLegend(chartData, indexOrParam = null) {
     const ind = chartData.indicators;
     
     if (ind && ind.volume) {
-        indRows.push({ type: 'volume', label: 'Vol', value: volume != null ? formatPrice(volume) : '—', color: '#8b9bb0', noSettings: true, visible: chartData.volumeSeries ? chartData.volumeSeries.options().visible !== false : true });
+        indRows.push({ type: 'volume', label: 'Vol', value: volume != null ? formatPrice(volume) : 'ΓÇö', color: '#8b9bb0', noSettings: true, visible: chartData.volumeSeries ? chartData.volumeSeries.options().visible !== false : true });
     }
     if (ind && ind.sma1) {
-        indRows.push({ type: 'sma1', label: `SMA 1 (${ind.sma1Period})`, value: sma1Val != null ? formatPrice(sma1Val) : '—', color: ind.sma1Color, visible: chartData.smaSeries1 ? chartData.smaSeries1.options().visible !== false : true });
+        indRows.push({ type: 'sma1', label: `SMA 1 (${ind.sma1Period})`, value: sma1Val != null ? formatPrice(sma1Val) : 'ΓÇö', color: ind.sma1Color, visible: chartData.smaSeries1 ? chartData.smaSeries1.options().visible !== false : true });
     }
     if (ind && ind.sma2) {
-        indRows.push({ type: 'sma2', label: `SMA 2 (${ind.sma2Period})`, value: sma2Val != null ? formatPrice(sma2Val) : '—', color: ind.sma2Color, visible: chartData.smaSeries2 ? chartData.smaSeries2.options().visible !== false : true });
+        indRows.push({ type: 'sma2', label: `SMA 2 (${ind.sma2Period})`, value: sma2Val != null ? formatPrice(sma2Val) : 'ΓÇö', color: ind.sma2Color, visible: chartData.smaSeries2 ? chartData.smaSeries2.options().visible !== false : true });
     }
     if (ind && ind.sma3) {
-        indRows.push({ type: 'sma3', label: `SMA 3 (${ind.sma3Period})`, value: sma3Val != null ? formatPrice(sma3Val) : '—', color: ind.sma3Color, visible: chartData.smaSeries3 ? chartData.smaSeries3.options().visible !== false : true });
+        indRows.push({ type: 'sma3', label: `SMA 3 (${ind.sma3Period})`, value: sma3Val != null ? formatPrice(sma3Val) : 'ΓÇö', color: ind.sma3Color, visible: chartData.smaSeries3 ? chartData.smaSeries3.options().visible !== false : true });
     }
     if (ind && ind.ema1) {
-        indRows.push({ type: 'ema1', label: `EMA 1 (${ind.ema1Period})`, value: ema1Val != null ? formatPrice(ema1Val) : '—', color: ind.ema1Color, visible: chartData.emaSeries1 ? chartData.emaSeries1.options().visible !== false : true });
+        indRows.push({ type: 'ema1', label: `EMA 1 (${ind.ema1Period})`, value: ema1Val != null ? formatPrice(ema1Val) : 'ΓÇö', color: ind.ema1Color, visible: chartData.emaSeries1 ? chartData.emaSeries1.options().visible !== false : true });
     }
     if (ind && ind.ema2) {
-        indRows.push({ type: 'ema2', label: `EMA 2 (${ind.ema2Period})`, value: ema2Val != null ? formatPrice(ema2Val) : '—', color: ind.ema2Color, visible: chartData.emaSeries2 ? chartData.emaSeries2.options().visible !== false : true });
+        indRows.push({ type: 'ema2', label: `EMA 2 (${ind.ema2Period})`, value: ema2Val != null ? formatPrice(ema2Val) : 'ΓÇö', color: ind.ema2Color, visible: chartData.emaSeries2 ? chartData.emaSeries2.options().visible !== false : true });
     }
     if (ind && ind.ema3) {
-        indRows.push({ type: 'ema3', label: `EMA 3 (${ind.ema3Period})`, value: ema3Val != null ? formatPrice(ema3Val) : '—', color: ind.ema3Color, visible: chartData.emaSeries3 ? chartData.emaSeries3.options().visible !== false : true });
+        indRows.push({ type: 'ema3', label: `EMA 3 (${ind.ema3Period})`, value: ema3Val != null ? formatPrice(ema3Val) : 'ΓÇö', color: ind.ema3Color, visible: chartData.emaSeries3 ? chartData.emaSeries3.options().visible !== false : true });
     }
     if (ind && ind.bb) {
-        const bbStr = bbMiddle != null ? `${formatPrice(bbUpper)}, ${formatPrice(bbMiddle)}, ${formatPrice(bbLower)}` : '—';
+        const bbStr = bbMiddle != null ? `${formatPrice(bbUpper)}, ${formatPrice(bbMiddle)}, ${formatPrice(bbLower)}` : 'ΓÇö';
         indRows.push({ type: 'bb', label: `BB ${ind.bbPeriod}`, value: bbStr, color: ind.bbColor, visible: chartData.bbUpperSeries ? chartData.bbUpperSeries.options().visible !== false : true });
     }
     if (ind && ind.rsi) {
-        indRows.push({ type: 'rsi', label: `RSI ${ind.rsiPeriod}`, value: rsiVal != null ? rsiVal.toFixed(2) : '—', color: ind.rsiColor, visible: chartData.rsiSeries ? chartData.rsiSeries.options().visible !== false : true });
+        indRows.push({ type: 'rsi', label: `RSI ${ind.rsiPeriod}`, value: rsiVal != null ? rsiVal.toFixed(2) : 'ΓÇö', color: ind.rsiColor, visible: chartData.rsiSeries ? chartData.rsiSeries.options().visible !== false : true });
     }
     if (ind && ind.vwap) {
-        indRows.push({ type: 'vwap', label: 'VWAP', value: vwapVal != null ? formatPrice(vwapVal) : '—', color: ind.vwapColor, visible: chartData.vwapSeries ? chartData.vwapSeries.options().visible !== false : true });
+        indRows.push({ type: 'vwap', label: 'VWAP', value: vwapVal != null ? formatPrice(vwapVal) : 'ΓÇö', color: ind.vwapColor, visible: chartData.vwapSeries ? chartData.vwapSeries.options().visible !== false : true });
     }
     if (ind && ind.atr) {
-        indRows.push({ type: 'atr', label: `ATR ${ind.atrPeriod}`, value: atrVal != null ? formatPrice(atrVal) : '—', color: ind.atrColor, visible: chartData.atrSeries ? chartData.atrSeries.options().visible !== false : true });
+        indRows.push({ type: 'atr', label: `ATR ${ind.atrPeriod}`, value: atrVal != null ? formatPrice(atrVal) : 'ΓÇö', color: ind.atrColor, visible: chartData.atrSeries ? chartData.atrSeries.options().visible !== false : true });
     }
     if (ind && ind.vpvr) {
-        const pocVal = chartData.vpvrPocPrice != null ? formatPrice(chartData.vpvrPocPrice) : '—';
+        const pocVal = chartData.vpvrPocPrice != null ? formatPrice(chartData.vpvrPocPrice) : 'ΓÇö';
         indRows.push({ type: 'vpvr', label: 'VPVR', value: `POC: ${pocVal}`, color: '#facc15', noSettings: true, visible: chartData.indicators.vpvrVisible !== false });
     }
     if (ind && ind.sessions) {
-        let sessionsVal = '—';
+        let sessionsVal = 'ΓÇö';
         if (timeVal) {
             const d = new Date(timeVal * 1000);
             const y = d.getUTCFullYear();
@@ -3361,7 +3506,7 @@ function updateChartLegend(chartData, indexOrParam = null) {
         }
         
         indRows.forEach(row => {
-            if (row.value !== '—' || indexOrParam !== null) {
+            if (row.value !== 'ΓÇö' || indexOrParam !== null) {
                 const valEl = legendEl.querySelector(`.legend-ind-row[data-ind="${row.type}"] .legend-ind-val`);
                 if (valEl) valEl.textContent = row.value;
             }
@@ -3620,7 +3765,7 @@ function switchChartSymbol(chartId, newSymbol) {
     if (!chartData || chartData.symbol === newSymbol) return;
 
     if (chartData.replay && chartData.replay.active) {
-        ReplayService.Controller.exit(chartId);
+        exitReplayMode(chartId);
     }
 
     if (newSymbol === 'none') {
@@ -3837,7 +3982,7 @@ function toggleTheme() {
     document.body.classList.toggle("light-theme", isLight);
     
     const btn = document.getElementById("theme-toggle");
-    if (btn) btn.textContent = isLight ? "🌙" : "☀️";
+    if (btn) btn.textContent = isLight ? "≡ƒîÖ" : "ΓÿÇ∩╕Å";
     
     const themeOptions = ThemeService.getChartThemeOptions(isLight);
     Object.values(state.charts).forEach(chartData => {
@@ -4050,7 +4195,7 @@ function runWheelDiagnostics(chartId) {
     const container = document.getElementById(`${chartId}-container`);
     if (!container) return;
     
-    console.group(`🔍 Wheel Event Investigation: ${chartId}`);
+    console.group(`≡ƒöì Wheel Event Investigation: ${chartId}`);
     console.log("1. Exact DOM element acting as container:", container);
     
     const canvas = container.querySelector('canvas');
@@ -4095,6 +4240,343 @@ function runWheelDiagnostics(chartId) {
 
 
 
+
+// --- Market Replay Engine ---
+
+function toggleReplayMode(chartId) {
+    const chartData = state.charts[chartId];
+    if (chartData.replay && chartData.replay.active) {
+        exitReplayMode(chartId);
+    } else {
+        startReplaySelection(chartId);
+    }
+}
+
+function startReplaySelection(chartId) {
+    const activeChart = state.charts[chartId];
+    if (!ReplayService.startSelection(activeChart)) {
+        alert("Please load a chart first.");
+        return;
+    }
+    
+    const btn = document.getElementById(`${chartId}-replay-toggle`);
+    if (btn) {
+        btn.dataset.originalText = btn.textContent;
+        btn.textContent = "Cancel Replay";
+        btn.style.background = "rgba(59, 130, 246, 0.2)";
+    }
+    
+    const container = document.getElementById(`${activeChart.id}-container`);
+    container.style.cursor = "crosshair";
+    
+    setPaneMessage(activeChart.id, "Click on any historical candle to start replay from there. Press ESC to cancel.");
+    
+    const escapeHandler = (e) => {
+        if (e.key === 'Escape') {
+            exitReplayMode(chartId);
+        }
+    };
+    document.addEventListener('keydown', escapeHandler);
+    activeChart.replay._escapeHandler = escapeHandler;
+}
+
+function startReplayAt(chartId, time) {
+    const chartData = state.charts[chartId];
+    if (!chartData || !chartData.replay) return;
+    clearPaneMessage(chartData.id);
+    
+    const container = document.getElementById(`${chartData.id}-container`);
+    container.style.cursor = "default";
+    
+    if (chartData.replay._escapeHandler) {
+        document.removeEventListener('keydown', chartData.replay._escapeHandler);
+        delete chartData.replay._escapeHandler;
+    }
+    
+    let msTime = typeof time === 'object' ? TimeUtils._getMs(time) / 1000 : time;
+    
+    ReplayService.startAt(chartData, msTime);
+    
+    unsubscribeChart(chartData);
+    
+    buildReplayUI(chartId);
+    ReplayService.renderFrame(chartData);
+    syncChartWithCache(chartData);
+    ReplayService.updateMarkers(chartData, state.drawings[chartData.symbol]);
+    updateReplayStatsUI(chartId);
+    
+    const btn = document.getElementById(`${chartId}-replay-toggle`);
+    if (btn) {
+        btn.textContent = "ΓÅ╣";
+        btn.title = "Exit Replay";
+        btn.style.background = "rgba(239, 68, 68, 0.2)";
+    }
+}
+
+function buildReplayUI(chartId) {
+    let panel = document.getElementById(`replay-toolbar-${chartId}`);
+    if (!panel) {
+        panel = document.createElement("div");
+        panel.id = `replay-toolbar-${chartId}`;
+        panel.className = "replay-toolbar-embedded";
+        panel.style.cssText = `
+            position: absolute;
+            bottom: 20px;
+            left: 50%;
+            top: auto !important;
+            height: fit-content !important;
+            min-height: unset !important;
+            width: max-content;
+            max-width: 95%;
+            transform: translateX(-50%) scale(0.75);
+            transform-origin: bottom center;
+            background: #1e293b;
+            border: 1px solid #3b82f6;
+            padding: 8px 12px;
+            border-radius: 8px;
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            justify-content: center;
+            flex-wrap: wrap;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+            color: white;
+            font-family: inherit;
+        `;
+        const container = document.getElementById(`${chartId}-container`);
+        if (container) {
+            container.appendChild(panel);
+        } else {
+            document.body.appendChild(panel);
+        }
+    }
+    
+    panel.innerHTML = `
+        <button id="${chartId}-replay-play" class="theme-btn" style="background: #10b981; border: none; padding: 6px 10px;">Γû╢ Play</button>
+        <button id="${chartId}-replay-pause" class="theme-btn" style="background: #f59e0b; border: none; padding: 6px 10px; display: none;">ΓÅ╕ Pause</button>
+        <button id="${chartId}-replay-step-back" class="theme-btn" title="Step Back">ΓÅ«</button>
+        <button id="${chartId}-replay-step-fwd" class="theme-btn" title="Step Forward">ΓÅ¡</button>
+        <button id="${chartId}-replay-jump-back" class="theme-btn" title="Jump Back 10">-10</button>
+        <button id="${chartId}-replay-jump-fwd" class="theme-btn" title="Jump Forward 10">+10</button>
+        <select id="${chartId}-replay-speed" class="theme-btn" title="Replay Speed" style="padding: 4px;">
+            <option value="0.25">0.25x</option>
+            <option value="0.5">0.5x</option>
+            <option value="1" selected>1x</option>
+            <option value="2">2x</option>
+            <option value="5">5x</option>
+            <option value="10">10x</option>
+            <option value="25">25x</option>
+            <option value="50">50x</option>
+        </select>
+        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 2px;"></div>
+        <button id="${chartId}-replay-buy" class="theme-btn" style="background: #10b981; border: none; padding: 6px 10px;">Buy</button>
+        <button id="${chartId}-replay-sell" class="theme-btn" style="background: #ef4444; border: none; padding: 6px 10px;">Sell</button>
+        <button id="${chartId}-replay-close" class="theme-btn" style="background: #394654; border: none; padding: 6px 10px;">Close</button>
+        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 2px;"></div>
+        <div style="display: flex; flex-direction: column; font-size: 11px; line-height: 1.2;">
+            <span style="color:#8b9bb0">OHM: <span id="${chartId}-replay-bal" style="color:white;font-weight:bold;">100,000</span></span>
+            <span style="color:#8b9bb0">PnL: <span id="${chartId}-replay-pnl" style="font-weight:bold;">0.00</span></span>
+        </div>
+        <div style="border-left: 1px solid #394654; height: 24px; margin: 0 2px;"></div>
+        <button id="${chartId}-replay-stats-toggle" class="theme-btn" style="background: #3b82f6; border: none; padding: 6px 10px;">≡ƒôè Stats</button>
+        <button id="${chartId}-replay-exit" class="theme-btn" style="background: #ef4444; border: none; padding: 6px 10px;">Exit</button>
+    `;
+    
+    document.getElementById(`${chartId}-replay-play`).onclick = () => {
+        const chartData = state.charts[chartId];
+        if (chartData && chartData.replay) {
+            chartData.replay.isPlaying = true;
+            document.getElementById(`${chartId}-replay-play`).style.display = "none";
+            document.getElementById(`${chartId}-replay-pause`).style.display = "inline-block";
+            ReplayService.runLoop(chartData, 
+                () => onReplayFrameRendered(chartData),
+                () => {
+                    document.getElementById(`${chartId}-replay-pause`).click();
+                    alert("End of historical data reached.");
+                }
+            );
+        }
+    };
+    
+    document.getElementById(`${chartId}-replay-pause`).onclick = () => {
+        const chartData = state.charts[chartId];
+        if (chartData && chartData.replay) {
+            chartData.replay.isPlaying = false;
+            document.getElementById(`${chartId}-replay-play`).style.display = "inline-block";
+            document.getElementById(`${chartId}-replay-pause`).style.display = "none";
+            if (chartData.replay.timer) clearTimeout(chartData.replay.timer);
+        }
+    };
+    
+    document.getElementById(`${chartId}-replay-step-back`).onclick = () => { 
+        const chartData = state.charts[chartId];
+        ReplayService.step(chartData, -1, () => onReplayFrameRendered(chartData)); 
+    };
+    document.getElementById(`${chartId}-replay-step-fwd`).onclick = () => { 
+        const chartData = state.charts[chartId];
+        ReplayService.step(chartData, 1, () => onReplayFrameRendered(chartData)); 
+    };
+    document.getElementById(`${chartId}-replay-jump-back`).onclick = () => { 
+        const chartData = state.charts[chartId];
+        ReplayService.step(chartData, -10, () => onReplayFrameRendered(chartData)); 
+    };
+    document.getElementById(`${chartId}-replay-jump-fwd`).onclick = () => { 
+        const chartData = state.charts[chartId];
+        ReplayService.step(chartData, 10, () => onReplayFrameRendered(chartData)); 
+    };
+    
+    document.getElementById(`${chartId}-replay-speed`).onchange = (e) => {
+        const chartData = state.charts[chartId];
+        if (chartData && chartData.replay) {
+            chartData.replay.speed = parseFloat(e.target.value);
+        }
+    };
+    
+    document.getElementById(`${chartId}-replay-buy`).onclick = () => { 
+        ReplayService.PaperTrading.executeTrade(state.charts[chartId], 'Long');
+        onReplayFrameRendered(state.charts[chartId]);
+    };
+    document.getElementById(`${chartId}-replay-sell`).onclick = () => { 
+        ReplayService.PaperTrading.executeTrade(state.charts[chartId], 'Short');
+        onReplayFrameRendered(state.charts[chartId]);
+    };
+    document.getElementById(`${chartId}-replay-close`).onclick = () => { 
+        ReplayService.PaperTrading.closeAllTrades(state.charts[chartId]);
+        onReplayFrameRendered(state.charts[chartId]);
+    };
+    
+    document.getElementById(`${chartId}-replay-stats-toggle`).onclick = () => {
+        const p = document.getElementById(`replay-analytics-panel-${chartId}`);
+        if (p) p.style.display = p.style.display === "none" ? "block" : "none";
+    };
+    
+    document.getElementById(`${chartId}-replay-exit`).onclick = () => exitReplayMode(chartId);
+    
+    updateReplayAnalyticsPanel(chartId);
+}
+
+function onReplayFrameRendered(chartData) {
+    syncChartWithCache(chartData);
+    
+    const key = chartData.symbol;
+    const drawings = state.drawings[key] || [];
+    ReplayService.updateMarkers(chartData, drawings);
+    
+    updateReplayStatsUI(chartData.id);
+}
+
+
+
+function updateReplayStatsUI(chartId) {
+    const chartData = state.charts[chartId];
+    if (!chartData || !chartData.replay) return;
+    
+    let openPnl = 0;
+    const currentCandle = chartData.replay.fullData[chartData.replay.currentIndex];
+    if (currentCandle) {
+        const price = currentCandle.close;
+        chartData.replay.paper.positions.forEach(pos => {
+            const pnl = pos.direction === 'Long' ? (price - pos.entryPrice) * pos.size : (pos.entryPrice - price) * pos.size;
+            openPnl += pnl;
+        });
+    }
+    
+    const balEl = document.getElementById(`${chartId}-replay-bal`);
+    const pnlEl = document.getElementById(`${chartId}-replay-pnl`);
+    
+    if (balEl && pnlEl) {
+        balEl.textContent = `${chartData.replay.paper.balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        pnlEl.textContent = `${openPnl >= 0 ? '+' : ''}${openPnl.toFixed(2)}`;
+        pnlEl.style.color = openPnl >= 0 ? '#10b981' : '#ef4444';
+    }
+    
+    updateReplayAnalyticsPanel(chartId, openPnl);
+}
+
+function updateReplayAnalyticsPanel(chartId, openPnl = 0) {
+    const chartData = state.charts[chartId];
+    if (!chartData || !chartData.replay) return;
+    
+    const history = chartData.replay.paper.history;
+    const wins = history.filter(t => t.pnl > 0);
+    const losses = history.filter(t => t.pnl <= 0);
+    
+    const winRate = history.length > 0 ? ((wins.length / history.length) * 100).toFixed(1) : '0.0';
+    
+    let grossWin = 0;
+    let grossLoss = 0;
+    let largestWin = 0;
+    let largestLoss = 0;
+    
+    wins.forEach(w => { grossWin += w.pnl; if (w.pnl > largestWin) largestWin = w.pnl; });
+    losses.forEach(l => { grossLoss += Math.abs(l.pnl); if (l.pnl < largestLoss) largestLoss = l.pnl; });
+    
+    const avgWin = wins.length > 0 ? (grossWin / wins.length) : 0;
+    const avgLoss = losses.length > 0 ? (grossLoss / losses.length) : 0;
+    const profitFactor = grossLoss > 0 ? (grossWin / grossLoss).toFixed(2) : (grossWin > 0 ? 'Γê₧' : '0.00');
+    
+    const netPnl = (chartData.replay.paper.balance - chartData.replay.paper.initialBalance) + openPnl;
+    const currentEquity = chartData.replay.paper.balance + openPnl;
+    
+    window.ModalService.renderReplayAnalyticsPanel(
+        document.getElementById(`${chartId}-container`),
+        {
+            panelId: `replay-analytics-panel-${chartId}`,
+            initialBalance: chartData.replay.paper.initialBalance,
+            currentEquity: currentEquity,
+            netPnl: netPnl,
+            winRate: winRate,
+            totalTrades: history.length,
+            avgWin: avgWin,
+            avgLoss: avgLoss,
+            largestWin: largestWin,
+            largestLoss: largestLoss,
+            profitFactor: profitFactor
+        }
+    );
+}
+
+function exitReplayMode(chartId) {
+    const chartData = state.charts[chartId];
+    if (!chartData || !chartData.replay) return;
+    
+    const wasSelecting = chartData.replay.status === 'selecting';
+    const wasActive = chartData.replay.status === 'active';
+    
+    if (chartData.replay._escapeHandler) {
+        document.removeEventListener('keydown', chartData.replay._escapeHandler);
+    }
+    
+    ReplayService.exit(chartData);
+    
+    if (wasSelecting) {
+        const container = document.getElementById(`${chartId}-container`);
+        if (container) container.style.cursor = "default";
+        clearPaneMessage(chartId);
+    } else if (wasActive) {
+        syncChartWithCache(chartData);
+        subscribeChart(chartData);
+    }
+    
+    const panel = document.getElementById(`replay-toolbar-${chartId}`);
+    if (panel) panel.remove();
+    
+    const analyticsPanel = document.getElementById(`replay-analytics-panel-${chartId}`);
+    if (analyticsPanel) analyticsPanel.remove();
+    
+    const btn = document.getElementById(`${chartId}-replay-toggle`);
+    if (btn) {
+        btn.textContent = btn.dataset.originalText || "ΓÅ¬";
+        btn.title = "Market Replay";
+        btn.style.background = "";
+    }
+    
+    if (chartData && chartData.chart) {
+        updateMarkers(chartData);
+        LayoutService.scrollToNewestActualCandle(chartData, state.chartCount);
+    }
+}
 
 // --- Backtesting System ---
 function openBacktestModal() {
@@ -4222,9 +4704,9 @@ function renderBacktestResults(chartData, results) {
     }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  VOLUME PROFILE (VPVR)  —  Canvas overlay, TradingView style
-// ═══════════════════════════════════════════════════════════════════════════
+// ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+//  VOLUME PROFILE (VPVR)  ΓÇö  Canvas overlay, TradingView style
+// ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
 
 
 
@@ -4234,10 +4716,10 @@ function renderBacktestResults(chartData, results) {
 
 
 
-// ═══════════════════════════════════════════════════════════════════════════
-//  SESSION HIGHLIGHTING  —  Canvas overlay, TradingView style
-//  Asia: 00:00–09:00 UTC  |  London: 07:00–16:00 UTC  |  NY: 13:00–22:00 UTC
-// ═══════════════════════════════════════════════════════════════════════════
+// ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+//  SESSION HIGHLIGHTING  ΓÇö  Canvas overlay, TradingView style
+//  Asia: 00:00ΓÇô09:00 UTC  |  London: 07:00ΓÇô16:00 UTC  |  NY: 13:00ΓÇô22:00 UTC
+// ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
 
 
 
@@ -4246,19 +4728,135 @@ function renderBacktestResults(chartData, results) {
 
 
 
-/* ═══════════════════════════════════════════════════════════════
+/* ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
    NEW FEATURES
    1. Header Nav Tabs
    2. Watchlist Panel (collapsible right-side sidebar)
    3. Chart Right-Click Context Menu
-   ═══════════════════════════════════════════════════════════════ */
+   ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ */
 
 
 
+function showAlertsHub() {
+    // Collect all active alerts from drawings
+    const allAlerts = [];
+    if (state && state.drawings) {
+        Object.entries(state.drawings).forEach(([symbol, lines]) => {
+            if (!Array.isArray(lines)) return;
+            lines.forEach(line => {
+                if (line.type === 'alert') {
+                    allAlerts.push({ symbol, price: line.price, id: line.id, active: line.active });
+                }
+            });
+        });
+    }
+
+    // Remove existing
+    const existing = document.getElementById('alerts-hub-modal');
+    if (existing) { existing.remove(); return; }
+
+    const modal = document.createElement('div');
+    modal.id = 'alerts-hub-modal';
+    modal.style.cssText = `
+        position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+        width: 380px; max-height: 75vh;
+        background: var(--glass-bg); backdrop-filter: blur(20px) saturate(1.5);
+        border: 1px solid var(--glass-border);
+        border-radius: 14px;
+        box-shadow: var(--glass-shadow);
+        z-index: 8000;
+        display: flex; flex-direction: column;
+        font-family: inherit; color: var(--text);
+        overflow: hidden;
+        animation: alertsHubIn 180ms var(--ease-out) both;
+    `;
+
+    const header = document.createElement('div');
+    header.style.cssText = `
+        display: flex; align-items: center; justify-content: space-between;
+        padding: 14px 18px;
+        border-bottom: 1px solid var(--border);
+        font-size: 13px; font-weight: 700; letter-spacing: 0.04em;
+        text-transform: uppercase; color: var(--blue);
+    `;
+    header.innerHTML = `
+        <span style="display:flex;align-items:center;gap:8px">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+            Price Alerts (${allAlerts.length})
+        </span>
+        <button onclick="this.closest('#alerts-hub-modal').remove()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;line-height:1;padding:0">├ù</button>
+    `;
+
+    const body = document.createElement('div');
+    body.style.cssText = 'flex:1; overflow-y:auto; padding:8px;';
+
+    if (allAlerts.length === 0) {
+        body.innerHTML = `
+            <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;height:160px;gap:12px;color:var(--muted)">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" opacity="0.35"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+                <p style="margin:0;font-size:13px">No active alerts</p>
+                <p style="margin:0;font-size:11px;opacity:0.6">Right-click on a chart to add an alert</p>
+            </div>`;
+    } else {
+        allAlerts.forEach(alert => {
+            const row = document.createElement('div');
+            row.style.cssText = `
+                display:flex; align-items:center; justify-content:space-between;
+                padding:9px 12px; border-radius:8px; margin-bottom:4px;
+                background: var(--panel-2); border: 1px solid var(--border);
+                font-size:12px;
+            `;
+            const priceStr = alert.price < 1 ? alert.price.toFixed(4) : alert.price.toFixed(2);
+            row.innerHTML = `
+                <div style="display:flex;flex-direction:column;gap:2px">
+                    <span style="font-weight:700;color:var(--text)">${alert.symbol}</span>
+                    <span style="color:var(--muted);font-size:11px">Alert @ ${priceStr}</span>
+                </div>
+                <div style="display:flex;align-items:center;gap:6px">
+                    <span style="font-size:10px;padding:2px 6px;border-radius:4px;background:${alert.active ? 'rgba(16,185,129,0.18)' : 'rgba(107,114,128,0.2)'};color:${alert.active ? 'var(--green)' : 'var(--muted)'}">${alert.active ? 'ACTIVE' : 'PENDING'}</span>
+                </div>
+            `;
+            body.appendChild(row);
+        });
+    }
+
+    modal.appendChild(header);
+    modal.appendChild(body);
+    document.body.appendChild(modal);
+
+    // Dismiss on click outside
+    setTimeout(() => {
+        const dismiss = (e) => {
+            if (!modal.contains(e.target)) {
+                modal.remove();
+                document.removeEventListener('mousedown', dismiss);
+            }
+        };
+        document.addEventListener('mousedown', dismiss);
+    }, 10);
+}
 
 // Update alert badge count
+function updateNotifBadge() {
+    const badge = document.getElementById('notif-badge');
+    if (!badge) return;
+    let count = 0;
+    if (state && state.drawings) {
+        Object.values(state.drawings).forEach(lines => {
+            if (Array.isArray(lines)) {
+                count += lines.filter(l => l.type === 'alert').length;
+            }
+        });
+    }
+    if (count > 0) {
+        badge.textContent = count > 9 ? '9+' : String(count);
+        badge.style.display = 'block';
+    } else {
+        badge.style.display = 'none';
+    }
+}
 
-// ── 2. Watchlist Panel ───────────────────────────────────────────
+// ΓöÇΓöÇ 2. Watchlist Panel ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 const watchlistState = {
     open: false,
     symbols: {},        // symbol -> { price, change24h, el }
@@ -4273,28 +4871,28 @@ function getCryptoIconHtml(symbol) {
     
     if (sym === 'BTC') {
         bg = 'linear-gradient(135deg, #f7931a, #f7931a)';
-        char = '₿';
+        char = 'Γé┐';
     } else if (sym === 'ETH') {
         bg = 'linear-gradient(135deg, #627eea, #3c3c3d)';
-        char = 'Ξ';
+        char = '╬₧';
     } else if (sym === 'SOL') {
         bg = 'linear-gradient(135deg, #14f195, #9945ff)';
-        char = '◎';
+        char = 'ΓùÄ';
     } else if (sym === 'TURBO') {
         bg = 'linear-gradient(135deg, #eab308, #ca8a04)';
         char = 'T';
     } else if (sym === 'XRP') {
         bg = 'linear-gradient(135deg, #23292f, #00aae4)';
-        char = '✕';
+        char = 'Γ£ò';
     } else if (sym === 'ADA') {
         bg = 'linear-gradient(135deg, #0033ad, #002280)';
-        char = '₳';
+        char = 'Γé│';
     } else if (sym === 'DOT') {
         bg = 'linear-gradient(135deg, #e6007a, #a60058)';
-        char = '●';
+        char = 'ΓùÅ';
     } else if (sym === 'LINK') {
         bg = 'linear-gradient(135deg, #2a5ada, #1a3a9a)';
-        char = '⬡';
+        char = 'Γ¼í';
     } else {
         let hash = 0;
         for (let i = 0; i < sym.length; i++) {
@@ -4308,7 +4906,7 @@ function getCryptoIconHtml(symbol) {
     return `<div class="wl-coin-icon" style="background: ${bg};">${char}</div>`;
 }
 
-// ── 3. Chart Right-Click Context Menu ────────────────────────────
+// ΓöÇΓöÇ 3. Chart Right-Click Context Menu ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 const ctxMenu = {
     el: null,
     chartData: null,
@@ -4324,8 +4922,8 @@ function initContextMenu() {
     document.getElementById('ctx-add-alert').addEventListener('click', () => {
         hideCtxMenu();
         if (ctxMenu.chartData && ctxMenu.price !== null) {
-            if (typeof AlertService.AlertModal.open === 'function') {
-                AlertService.AlertModal.open(ctxMenu.chartData, ctxMenu.price);
+            if (typeof openPriceAlertModal === 'function') {
+                openPriceAlertModal(ctxMenu.chartData, ctxMenu.price);
             }
         }
     });
@@ -4377,12 +4975,12 @@ function showCtxMenu(x, y, chartData, price) {
     // Update header
     const header = document.getElementById('ctx-menu-header');
     if (header) {
-        const sym = chartData ? chartData.symbol : '—';
-        const priceStr = price !== null ? (price < 1 ? price.toFixed(4) : price.toFixed(2)) : '—';
-        header.textContent = `${sym}  ·  ${priceStr}`;
+        const sym = chartData ? chartData.symbol : 'ΓÇö';
+        const priceStr = price !== null ? (price < 1 ? price.toFixed(4) : price.toFixed(2)) : 'ΓÇö';
+        header.textContent = `${sym}  ┬╖  ${priceStr}`;
     }
 
-    // Position — keep within viewport
+    // Position ΓÇö keep within viewport
     ctxMenu.el.style.display = 'flex';
     ctxMenu.el.style.opacity = '0';
     ctxMenu.el.style.transform = 'scale(0.95) translateY(-4px)';
@@ -4463,7 +5061,7 @@ function addHLineFromCtxMenu(chartData, price) {
     if (typeof saveDrawings === 'function') saveDrawings();
 }
 
-// Attach contextmenu listener to each chart container — called from initializeChart
+// Attach contextmenu listener to each chart container ΓÇö called from initializeChart
 function attachChartContextMenu(chartData) {
     const container = document.getElementById(`${chartData.id}-container`);
     if (!container) return;
@@ -4480,7 +5078,7 @@ function attachChartContextMenu(chartData) {
     });
 }
 
-// ── Bootstrap all new features once DOM is ready ────────────────
+// ΓöÇΓöÇ Bootstrap all new features once DOM is ready ΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇΓöÇ
 function initNewFeatures() {
     WatchlistService.initialize({
         watchlistState: watchlistState,
@@ -4490,9 +5088,9 @@ function initNewFeatures() {
         getChartStates: () => state.charts,
         getActiveChartId: () => state.activeChartId,
         onSelectSymbol: (chartId, symbol) => switchChartSymbol(chartId, symbol),
-        onOpenAlerts: () => { if (typeof AlertService.AlertHub.show === 'function') AlertService.AlertHub.show(); },
+        onOpenAlerts: () => { if (typeof showAlertsHub === 'function') showAlertsHub(); },
         getIconHtml: (symbol) => typeof getCryptoIconHtml === 'function' ? getCryptoIconHtml(symbol) : '',
-        onPoll: () => { if (typeof AlertService.Notification.updateBadge === 'function') AlertService.Notification.updateBadge(); }
+        onPoll: () => { if (typeof updateNotifBadge === 'function') updateNotifBadge(); }
     });
 
     initContextMenu();
@@ -4526,23 +5124,3 @@ if (document.readyState === 'loading') {
 window.attachChartContextMenu = attachChartContextMenu;
 
 MarketWidgetService.initialize({ formatCurrency, formatPercent, formatNumber, getPerfClass });
-AlertService.initialize({ state, saveDrawings, DrawingService, ModalService });
-
-ReplayService.initialize({
-    state,
-    LayoutService,
-    IndicatorService,
-    DrawingService,
-    syncChartWithCache,
-    subscribeChart,
-    unsubscribeChart,
-    applyPriceUpdate,
-    updateMarkers,
-    formatCurrency,
-    formatPercent,
-    formatNumber,
-    setPaneMessage: window.setPaneMessage,
-    clearPaneMessage: window.clearPaneMessage,
-    TimeUtils: window.TimeUtils,
-    ModalService: window.ModalService
-});

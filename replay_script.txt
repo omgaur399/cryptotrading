@@ -1,0 +1,320 @@
+4101: function toggleReplayMode(chartId) {
+4102:     const chartData = state.charts[chartId];
+4103:     if (chartData.replay && chartData.replay.active) {
+4104:         exitReplayMode(chartId);
+4105:     } else {
+4106:         startReplaySelection(chartId);
+4107:     }
+4108: }
+4109: 
+4110: function startReplaySelection(chartId) {
+4111:     const activeChart = state.charts[chartId];
+4112:     if (!ReplayService.startSelection(activeChart)) {
+4113:         alert("Please load a chart first.");
+4114:         return;
+4115:     }
+4116:     
+4117:     const btn = document.getElementById(`${chartId}-replay-toggle`);
+4118:     if (btn) {
+4119:         btn.dataset.originalText = btn.textContent;
+4120:         btn.textContent = "Cancel Replay";
+4121:         btn.style.background = "rgba(59, 130, 246, 0.2)";
+4122:     }
+4123:     
+4124:     const container = document.getElementById(`${activeChart.id}-container`);
+4125:     container.style.cursor = "crosshair";
+4126:     
+4127:     setPaneMessage(activeChart.id, "Click on any historical candle to start replay from there. Press ESC to cancel.");
+4128:     
+4129:     const escapeHandler = (e) => {
+4130:         if (e.key === 'Escape') {
+4131:             exitReplayMode(chartId);
+4132:         }
+4133:     };
+4134:     document.addEventListener('keydown', escapeHandler);
+4135:     activeChart.replay._escapeHandler = escapeHandler;
+4136: }
+4137: 
+4138: function startReplayAt(chartId, time) {
+4139:     const chartData = state.charts[chartId];
+4140:     if (!chartData || !chartData.replay) return;
+4141:     clearPaneMessage(chartData.id);
+4142:     
+4143:     const container = document.getElementById(`${chartData.id}-container`);
+4144:     container.style.cursor = "default";
+4145:     
+4146:     if (chartData.replay._escapeHandler) {
+4147:         document.removeEventListener('keydown', chartData.replay._escapeHandler);
+4148:         delete chartData.replay._escapeHandler;
+4149:     }
+4150:     
+4151:     let msTime = typeof time === 'object' ? TimeUtils._getMs(time) / 1000 : time;
+4152:     
+4153:     ReplayService.startAt(chartData, msTime);
+4154:     
+4155:     unsubscribeChart(chartData);
+4156:     
+4157:     buildReplayUI(chartId);
+4158:     ReplayService.renderFrame(chartData);
+4159:     syncChartWithCache(chartData);
+4160:     ReplayService.updateMarkers(chartData, state.drawings[chartData.symbol]);
+4161:     updateReplayStatsUI(chartId);
+4162:     
+4163:     const btn = document.getElementById(`${chartId}-replay-toggle`);
+4164:     if (btn) {
+4165:         btn.textContent = "⏹";
+4166:         btn.title = "Exit Replay";
+4167:         btn.style.background = "rgba(239, 68, 68, 0.2)";
+4168:     }
+4169: }
+4170: 
+4171: function buildReplayUI(chartId) {
+4172:     let panel = document.getElementById(`replay-toolbar-${chartId}`);
+4173:     if (!panel) {
+4174:         panel = document.createElement("div");
+4175:         panel.id = `replay-toolbar-${chartId}`;
+4176:         panel.className = "replay-toolbar-embedded";
+4177:         panel.style.cssText = `
+4178:             position: absolute;
+4179:             bottom: 20px;
+4180:             left: 50%;
+4181:             top: auto !important;
+4182:             height: fit-content !important;
+4183:             min-height: unset !important;
+4184:             width: max-content;
+4185:             max-width: 95%;
+4186:             transform: translateX(-50%) scale(0.75);
+4187:             transform-origin: bottom center;
+4188:             background: #1e293b;
+4189:             border: 1px solid #3b82f6;
+4190:             padding: 8px 12px;
+4191:             border-radius: 8px;
+4192:             display: flex;
+4193:             gap: 8px;
+4194:             align-items: center;
+4195:             justify-content: center;
+4196:             flex-wrap: wrap;
+4197:             z-index: 1000;
+4198:             box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+4199:             color: white;
+4200:             font-family: inherit;
+4201:         `;
+4202:         const container = document.getElementById(`${chartId}-container`);
+4203:         if (container) {
+4204:             container.appendChild(panel);
+4205:         } else {
+4206:             document.body.appendChild(panel);
+4207:         }
+4208:     }
+4209:     
+4210:     panel.innerHTML = `
+4211:         <button id="${chartId}-replay-play" class="theme-btn" style="background: #10b981; border: none; padding: 6px 10px;">▶ Play</button>
+4212:         <button id="${chartId}-replay-pause" class="theme-btn" style="background: #f59e0b; border: none; padding: 6px 10px; display: none;">⏸ Pause</button>
+4213:         <button id="${chartId}-replay-step-back" class="theme-btn" title="Step Back">⏮</button>
+4214:         <button id="${chartId}-replay-step-fwd" class="theme-btn" title="Step Forward">⏭</button>
+4215:         <button id="${chartId}-replay-jump-back" class="theme-btn" title="Jump Back 10">-10</button>
+4216:         <button id="${chartId}-replay-jump-fwd" class="theme-btn" title="Jump Forward 10">+10</button>
+4217:         <select id="${chartId}-replay-speed" class="theme-btn" title="Replay Speed" style="padding: 4px;">
+4218:             <option value="0.25">0.25x</option>
+4219:             <option value="0.5">0.5x</option>
+4220:             <option value="1" selected>1x</option>
+4221:             <option value="2">2x</option>
+4222:             <option value="5">5x</option>
+4223:             <option value="10">10x</option>
+4224:             <option value="25">25x</option>
+4225:             <option value="50">50x</option>
+4226:         </select>
+4227:         <div style="border-left: 1px solid #394654; height: 24px; margin: 0 2px;"></div>
+4228:         <button id="${chartId}-replay-buy" class="theme-btn" style="background: #10b981; border: none; padding: 6px 10px;">Buy</button>
+4229:         <button id="${chartId}-replay-sell" class="theme-btn" style="background: #ef4444; border: none; padding: 6px 10px;">Sell</button>
+4230:         <button id="${chartId}-replay-close" class="theme-btn" style="background: #394654; border: none; padding: 6px 10px;">Close</button>
+4231:         <div style="border-left: 1px solid #394654; height: 24px; margin: 0 2px;"></div>
+4232:         <div style="display: flex; flex-direction: column; font-size: 11px; line-height: 1.2;">
+4233:             <span style="color:#8b9bb0">OHM: <span id="${chartId}-replay-bal" style="color:white;font-weight:bold;">100,000</span></span>
+4234:             <span style="color:#8b9bb0">PnL: <span id="${chartId}-replay-pnl" style="font-weight:bold;">0.00</span></span>
+4235:         </div>
+4236:         <div style="border-left: 1px solid #394654; height: 24px; margin: 0 2px;"></div>
+4237:         <button id="${chartId}-replay-stats-toggle" class="theme-btn" style="background: #3b82f6; border: none; padding: 6px 10px;">📊 Stats</button>
+4238:         <button id="${chartId}-replay-exit" class="theme-btn" style="background: #ef4444; border: none; padding: 6px 10px;">Exit</button>
+4239:     `;
+4240:     
+4241:     document.getElementById(`${chartId}-replay-play`).onclick = () => {
+4242:         const chartData = state.charts[chartId];
+4243:         if (chartData && chartData.replay) {
+4244:             chartData.replay.isPlaying = true;
+4245:             document.getElementById(`${chartId}-replay-play`).style.display = "none";
+4246:             document.getElementById(`${chartId}-replay-pause`).style.display = "inline-block";
+4247:             ReplayService.runLoop(chartData, 
+4248:                 () => onReplayFrameRendered(chartData),
+4249:                 () => {
+4250:                     document.getElementById(`${chartId}-replay-pause`).click();
+4251:                     alert("End of historical data reached.");
+4252:                 }
+4253:             );
+4254:         }
+4255:     };
+4256:     
+4257:     document.getElementById(`${chartId}-replay-pause`).onclick = () => {
+4258:         const chartData = state.charts[chartId];
+4259:         if (chartData && chartData.replay) {
+4260:             chartData.replay.isPlaying = false;
+4261:             document.getElementById(`${chartId}-replay-play`).style.display = "inline-block";
+4262:             document.getElementById(`${chartId}-replay-pause`).style.display = "none";
+4263:             if (chartData.replay.timer) clearTimeout(chartData.replay.timer);
+4264:         }
+4265:     };
+4266:     
+4267:     document.getElementById(`${chartId}-replay-step-back`).onclick = () => { 
+4268:         const chartData = state.charts[chartId];
+4269:         ReplayService.step(chartData, -1, () => onReplayFrameRendered(chartData)); 
+4270:     };
+4271:     document.getElementById(`${chartId}-replay-step-fwd`).onclick = () => { 
+4272:         const chartData = state.charts[chartId];
+4273:         ReplayService.step(chartData, 1, () => onReplayFrameRendered(chartData)); 
+4274:     };
+4275:     document.getElementById(`${chartId}-replay-jump-back`).onclick = () => { 
+4276:         const chartData = state.charts[chartId];
+4277:         ReplayService.step(chartData, -10, () => onReplayFrameRendered(chartData)); 
+4278:     };
+4279:     document.getElementById(`${chartId}-replay-jump-fwd`).onclick = () => { 
+4280:         const chartData = state.charts[chartId];
+4281:         ReplayService.step(chartData, 10, () => onReplayFrameRendered(chartData)); 
+4282:     };
+4283:     
+4284:     document.getElementById(`${chartId}-replay-speed`).onchange = (e) => {
+4285:         const chartData = state.charts[chartId];
+4286:         if (chartData && chartData.replay) {
+4287:             chartData.replay.speed = parseFloat(e.target.value);
+4288:         }
+4289:     };
+4290:     
+4291:     document.getElementById(`${chartId}-replay-buy`).onclick = () => { 
+4292:         ReplayService.PaperTrading.executeTrade(state.charts[chartId], 'Long');
+4293:         onReplayFrameRendered(state.charts[chartId]);
+4294:     };
+4295:     document.getElementById(`${chartId}-replay-sell`).onclick = () => { 
+4296:         ReplayService.PaperTrading.executeTrade(state.charts[chartId], 'Short');
+4297:         onReplayFrameRendered(state.charts[chartId]);
+4298:     };
+4299:     document.getElementById(`${chartId}-replay-close`).onclick = () => { 
+4300:         ReplayService.PaperTrading.closeAllTrades(state.charts[chartId]);
+4301:         onReplayFrameRendered(state.charts[chartId]);
+4302:     };
+4303:     
+4304:     document.getElementById(`${chartId}-replay-stats-toggle`).onclick = () => {
+4305:         const p = document.getElementById(`replay-analytics-panel-${chartId}`);
+4306:         if (p) p.style.display = p.style.display === "none" ? "block" : "none";
+4307:     };
+4308:     
+4309:     document.getElementById(`${chartId}-replay-exit`).onclick = () => exitReplayMode(chartId);
+4310:     
+4311:     updateReplayAnalyticsPanel(chartId);
+4312: }
+4313: 
+4314: function onReplayFrameRendered(chartData) {
+4315:     syncChartWithCache(chartData);
+4316:     
+4317:     const key = chartData.symbol;
+4318:     const drawings = state.drawings[key] || [];
+4319:     ReplayService.updateMarkers(chartData, drawings);
+4320:     
+4321:     updateReplayStatsUI(chartData.id);
+4322: }
+4323: 
+4324: 
+4325: 
+4326: function updateReplayStatsUI(chartId) {
+4327:     const chartData = state.charts[chartId];
+4328:     if (!chartData || !chartData.replay) return;
+4329:     
+4330:     let openPnl = 0;
+4331:     const currentCandle = chartData.replay.fullData[chartData.replay.currentIndex];
+4332:     if (currentCandle) {
+4333:         const price = currentCandle.close;
+4334:         chartData.replay.paper.positions.forEach(pos => {
+4335:             const pnl = pos.direction === 'Long' ? (price - pos.entryPrice) * pos.size : (pos.entryPrice - price) * pos.size;
+4336:             openPnl += pnl;
+4337:         });
+4338:     }
+4339:     
+4340:     const balEl = document.getElementById(`${chartId}-replay-bal`);
+4341:     const pnlEl = document.getElementById(`${chartId}-replay-pnl`);
+4342:     
+4343:     if (balEl && pnlEl) {
+4344:         balEl.textContent = `${chartData.replay.paper.balance.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+4345:         pnlEl.textContent = `${openPnl >= 0 ? '+' : ''}${openPnl.toFixed(2)}`;
+4346:         pnlEl.style.color = openPnl >= 0 ? '#10b981' : '#ef4444';
+4347:     }
+4348:     
+4349:     updateReplayAnalyticsPanel(chartId, openPnl);
+4350: }
+4351: 
+4352: function updateReplayAnalyticsPanel(chartId, openPnl = 0) {
+4353:     const chartData = state.charts[chartId];
+4354:     if (!chartData || !chartData.replay) return;
+4355:     
+4356:     const history = chartData.replay.paper.history;
+4357:     const wins = history.filter(t => t.pnl > 0);
+4358:     const losses = history.filter(t => t.pnl <= 0);
+4359:     
+4360:     const winRate = history.length > 0 ? ((wins.length / history.length) * 100).toFixed(1) : '0.0';
+4361:     
+4362:     let grossWin = 0;
+4363:     let grossLoss = 0;
+4364:     let largestWin = 0;
+4365:     let largestLoss = 0;
+4366:     
+4367:     wins.forEach(w => { grossWin += w.pnl; if (w.pnl > largestWin) largestWin = w.pnl; });
+4368:     losses.forEach(l => { grossLoss += Math.abs(l.pnl); if (l.pnl < largestLoss) largestLoss = l.pnl; });
+4369:     
+4370:     const avgWin = wins.length > 0 ? (grossWin / wins.length) : 0;
+4371:     const avgLoss = losses.length > 0 ? (grossLoss / losses.length) : 0;
+4372:     const profitFactor = grossLoss > 0 ? (grossWin / grossLoss).toFixed(2) : (grossWin > 0 ? '∞' : '0.00');
+4373:     
+4374:     const netPnl = (chartData.replay.paper.balance - chartData.replay.paper.initialBalance) + openPnl;
+4375:     const currentEquity = chartData.replay.paper.balance + openPnl;
+4376:     
+4377:     window.ModalService.renderReplayAnalyticsPanel(
+4378:         document.getElementById(`${chartId}-container`),
+4379:         {
+4380:             panelId: `replay-analytics-panel-${chartId}`,
+4381:             initialBalance: chartData.replay.paper.initialBalance,
+4382:             currentEquity: currentEquity,
+4383:             netPnl: netPnl,
+4384:             winRate: winRate,
+4385:             totalTrades: history.length,
+4386:             avgWin: avgWin,
+4387:             avgLoss: avgLoss,
+4388:             largestWin: largestWin,
+4389:             largestLoss: largestLoss,
+4390:             profitFactor: profitFactor
+4391:         }
+4392:     );
+4393: }
+4394: 
+4395: function exitReplayMode(chartId) {
+4396:     const chartData = state.charts[chartId];
+4397:     if (!chartData || !chartData.replay) return;
+4398:     
+4399:     const wasSelecting = chartData.replay.status === 'selecting';
+4400:     const wasActive = chartData.replay.status === 'active';
+4401:     
+4402:     if (chartData.replay._escapeHandler) {
+4403:         document.removeEventListener('keydown', chartData.replay._escapeHandler);
+4404:     }
+4405:     
+4406:     ReplayService.exit(chartData);
+4407:     
+4408:     if (wasSelecting) {
+4409:         const container = document.getElementById(`${chartId}-container`);
+4410:         if (container) container.style.cursor = "default";
+4411:         clearPaneMessage(chartId);
+4412:     } else if (wasActive) {
+4413:         syncChartWithCache(chartData);
+4414:         subscribeChart(chartData);
+4415:     }
+4416:     
+4417:     const panel = document.getElementById(`replay-toolbar-${chartId}`);
+4418:     if (panel) panel.remove();
+4419:     
+4420:     const analyticsPanel = document.getElementById(`replay-analytics-panel-${chartId}`);
