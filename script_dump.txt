@@ -16,7 +16,7 @@ function savePrimitiveDrawing(symbol, prim) {
         drawings.push(serialized);
     }
     
-    StorageService.saveDrawings(state.drawings);
+    saveDrawings();
 }
 
 function restorePrimitiveDrawings(chartData) {
@@ -39,7 +39,7 @@ window.clearAllDrawings = function() {
     Object.keys(state.drawings).forEach(symbol => {
         state.drawings[symbol] = [];
     });
-    StorageService.saveDrawings(state.drawings);
+    saveDrawings();
     
     // Clear from UI
     Object.values(state.charts).forEach(chartData => {
@@ -317,7 +317,7 @@ class DrawingManager {
         }
         if (state.drawings[chartData.symbol]) {
             state.drawings[chartData.symbol] = state.drawings[chartData.symbol].filter(d => d.id !== primitive.id);
-            StorageService.saveDrawings(state.drawings);
+            saveDrawings();
         }
     }
 
@@ -376,7 +376,24 @@ const TimeUtils = {
     }
 };
 
-const state = StateManager.createInitialState();
+const state = {
+    chartCount: CONFIG.DEFAULT_CHART_COUNT,
+    activeChartId: 'chart-1',
+    instruments: [],
+    charts: {},
+    liveStream: null,
+    drawings: {},
+    hlWs: null,
+    binanceWs: null,
+    hlPingInterval: null,
+    connected: false,
+    theme: "dark",
+    isSyncingCrosshair: false,
+    backtest: null, // New state for backtesting
+    replay: null,
+    syncCharts: false,
+    isSyncingScales: false,
+};
 
 document.addEventListener("DOMContentLoaded", initializeApp);
 
@@ -995,15 +1012,45 @@ function renderGrid() {
         }
 
         let targetChartType = savedConfig.chartType || "candles";
-        const chartData = StateManager.createChartState(
-            chartId,
-            instrumentId,
-            source,
-            symbol,
-            interval,
-            targetChartType,
-            targetIndicators
-        );
+        const chartData = {
+            id: chartId,
+            instrumentId: instrumentId,
+            source: source,
+            symbol: symbol,
+            interval: interval,
+            chart: null,
+            chartType: targetChartType,
+            candleSeries: null,
+            volumeSeries: null,
+            smaSeries: null,
+            smaSeries1: null,
+            smaSeries2: null,
+            smaSeries3: null,
+            emaSeries: null,
+            emaSeries1: null,
+            emaSeries2: null,
+            emaSeries3: null,
+            bbUpperSeries: null,
+            bbMiddleSeries: null,
+            bbLowerSeries: null,
+            rsiSeries: null,
+            vwapSeries: null,
+            atrSeries: null,
+            cachedData: [],
+            currentCandle: null,
+            lastPrice: null,
+            referencePrice: null,
+            liveSubscribed: false,
+            l2Subscribed: false,
+            lastDirection: 'up',
+            indicators: targetIndicators,
+            pendingUpdate: false,
+            flashDirection: 'up',
+            lastUIUpdate: 0,
+            customPriceOffset: 0,
+            isVerticalPanning: false,
+            panStartPrice: null,
+        };
 
         state.charts[chartId] = chartData;
         const pane = LayoutService.createChartPane(chartData, index);
@@ -1646,7 +1693,7 @@ function initializeChart(chartData) {
                             if (newTime !== null) draggingLineInfo.line.time = newTime;
                         }
                         Object.values(state.charts).forEach(cd => {
-                            if (cd.symbol === chartData.symbol) DrawingService.renderVerticalLine(cd, draggingLineInfo.line);
+                            if (cd.symbol === chartData.symbol) renderVerticalLine(cd, draggingLineInfo.line);
                         });
                     }
                 }
@@ -1849,7 +1896,7 @@ function initializeChart(chartData) {
                 window.paperTrading.positions.save();
                 window.paperTrading.renderPositions();
             } else {
-                StorageService.saveDrawings(state.drawings);
+                saveDrawings();
             }
             // Re-enable panning
             chartData.chart.applyOptions({ handleScroll: { pressedMouseMove: true } });
@@ -1945,7 +1992,7 @@ function initializeChart(chartData) {
                                     }
                                 });
                                 lines.splice(idx, 1);
-                                StorageService.saveDrawings(state.drawings);
+                                saveDrawings();
                             }
                         }
                     }
@@ -2012,9 +2059,9 @@ function initializeChart(chartData) {
                 if (logical !== null || time !== undefined) {
                     const lineObj = { type: 'verticalLine', symbol: chartData.symbol, time: time, logical: logical, id: id, color: state.theme === 'light' ? '#3b82f6' : '#60a5fa', lineWidth: 2 };
                     state.drawings[key].push(lineObj);
-                    StorageService.saveDrawings(state.drawings);
+                    saveDrawings();
                     Object.values(state.charts).forEach(cd => {
-                        if (cd.symbol === chartData.symbol) DrawingService.renderVerticalLine(cd, lineObj);
+                        if (cd.symbol === chartData.symbol) renderVerticalLine(cd, lineObj);
                     });
                 }
             } else if (chartData.drawingMode === "buyMarker" || chartData.drawingMode === "sellMarker") {
@@ -2022,7 +2069,7 @@ function initializeChart(chartData) {
                     state.drawings[key].push({
                         type: chartData.drawingMode, symbol: chartData.symbol, time: time, price: price, id: id
                     });
-                    StorageService.saveDrawings(state.drawings);
+                    saveDrawings();
                     Object.values(state.charts).forEach(cd => {
                         if (cd.symbol === chartData.symbol) updateMarkers(cd);
                     });
@@ -2101,7 +2148,9 @@ function initializeChart(chartData) {
     setTimeout(() => runWheelDiagnostics(chartData.id), 1000);
 
     // Attach right-click context menu to this chart
-    ContextMenuService.attach(chartData);
+    if (typeof window.attachChartContextMenu === 'function') {
+        window.attachChartContextMenu(chartData);
+    }
 }
 
 
@@ -2143,13 +2192,15 @@ function resetChart(chartData) {
         });
         chartData.renderedDrawings = {};
     }
-    DrawingService.cleanupVerticalLines(chartData);
+    cleanupVerticalLines(chartData);
 
     setPaneMessage(chartData.id, chartData.instrumentId === "none" ? "No Chart Selected" : "Loading");
     updateTicker(chartData, null, null);
 }
 
-
+function saveDrawings() {
+    StorageService.saveDrawings(state.drawings);
+}
 
 function addHorizontalLine(chartData, price) {
     const key = chartData.symbol;
@@ -2166,13 +2217,15 @@ function addHorizontalLine(chartData, price) {
         lineWidth: 2
     };
     state.drawings[key].push(lineObj);
-    StorageService.saveDrawings(state.drawings);
+    saveDrawings();
     Object.values(state.charts).forEach(cd => {
-        if (cd.symbol === chartData.symbol) DrawingService.renderHorizontalLine(cd, lineObj);
+        if (cd.symbol === chartData.symbol) renderHorizontalLine(cd, lineObj);
     });
 }
 
-
+function renderHorizontalLine(chartData, lineObj) {
+    DrawingService.renderHorizontalLine(chartData, lineObj);
+}
 
 function checkAndInteractWithLine(chartData, clickedPrice, clickedTime, point) {
     const key = chartData.symbol;
@@ -2240,7 +2293,7 @@ function openLineSettingsModal(chartData, lineObj, key) {
                 }
             });
             
-            StorageService.saveDrawings(state.drawings);
+            saveDrawings();
             window.ModalService.closeModal("line-settings-modal");
         },
         onDelete: () => {
@@ -2259,7 +2312,7 @@ function openLineSettingsModal(chartData, lineObj, key) {
             });
             const idx = state.drawings[key].findIndex(l => l.id === lineObj.id);
             if (idx !== -1) state.drawings[key].splice(idx, 1);
-            StorageService.saveDrawings(state.drawings);
+            saveDrawings();
             window.ModalService.closeModal("line-settings-modal");
         },
         onCancel: () => {
@@ -2273,9 +2326,13 @@ function restoreDrawings(chartData) {
     DrawingService.restoreNativeDrawings(chartData, lines);
 }
 
+function cleanupVerticalLines(chartData) {
+    DrawingService.cleanupVerticalLines(chartData);
+}
 
-
-
+function renderVerticalLine(chartData, lineObj) {
+    DrawingService.renderVerticalLine(chartData, lineObj);
+}
 
 function openVLineSettingsModal(chartData, lineObj) {
     const key = chartData.symbol;
@@ -2291,10 +2348,10 @@ function openVLineSettingsModal(chartData, lineObj) {
             lineObj.lineWidth = data.lineWidth;
             
             Object.values(state.charts).forEach(cd => {
-                if (cd.symbol === chartData.symbol) DrawingService.renderVerticalLine(cd, lineObj);
+                if (cd.symbol === chartData.symbol) renderVerticalLine(cd, lineObj);
             });
             
-            StorageService.saveDrawings(state.drawings);
+            saveDrawings();
             window.ModalService.closeModal("vline-settings-modal");
         },
         onDelete: () => {
@@ -2306,7 +2363,7 @@ function openVLineSettingsModal(chartData, lineObj) {
             });
             if (state.drawings[key]) {
                 state.drawings[key] = state.drawings[key].filter(d => d.id !== lineObj.id);
-                StorageService.saveDrawings(state.drawings);
+                saveDrawings();
             }
             window.ModalService.closeModal("vline-settings-modal");
         },
@@ -2327,7 +2384,7 @@ function openMarkerSettingsModal(chartData, markerObj, key) {
             if (lines) {
                 const idx = lines.findIndex(d => d.id === markerObj.id);
                 if (idx !== -1) lines.splice(idx, 1);
-                StorageService.saveDrawings(state.drawings);
+                saveDrawings();
                 Object.values(state.charts).forEach(cd => {
                     if (cd.symbol === chartData.symbol) updateMarkers(cd);
                 });
@@ -4294,20 +4351,15 @@ if (document.readyState === 'loading') {
 }
 
 // Expose attachChartContextMenu globally so initializeChart can call it
-
+window.attachChartContextMenu = ContextMenuService.attach;
 
 MarketWidgetService.initialize({ formatCurrency, formatPercent, formatNumber, getPerfClass });
-AlertService.initialize({ 
-    state, 
-    saveDrawings: () => StorageService.saveDrawings(state.drawings), 
-    DrawingService, 
-    ModalService 
-});
+AlertService.initialize({ state, saveDrawings, DrawingService, ModalService });
 
 
 ContextMenuService.initialize({
     state,
-    saveDrawings: () => StorageService.saveDrawings(state.drawings),
+    saveDrawings,
     AlertService
 });
 ReplayService.initialize({
