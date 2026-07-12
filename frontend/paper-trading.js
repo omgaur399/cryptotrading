@@ -1319,8 +1319,15 @@ window.PaperTrading = class PaperTrading {
                         if (cd.chart && !cd._ptSynced) {
                             const syncFn = () => { try { this.syncPositionLabels(cd); } catch(e) {} };
                             try {
-                                cd.chart.timeScale().subscribeVisibleTimeRangeChange(syncFn);
-                                cd.chart.timeScale().subscribeVisibleLogicalRangeChange(syncFn);
+                                if (window.ChartLifecycleService) {
+                                    window.ChartLifecycleService.attach(cd, {
+                                        visibleTimeRangeChange: syncFn,
+                                        visibleLogicalRangeChange: syncFn
+                                    });
+                                } else {
+                                    cd.chart.timeScale().subscribeVisibleTimeRangeChange(syncFn);
+                                    cd.chart.timeScale().subscribeVisibleLogicalRangeChange(syncFn);
+                                }
                             } catch(e) {}
                             cd._ptSynced = true;
                         }

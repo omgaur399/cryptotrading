@@ -185,8 +185,23 @@ const AlertService = (() => {
         }
     };
 
+    let currentAlertModal = null;
+    let alertDismissHandler = null;
+
     const AlertHub = {
+        destroy() {
+            if (currentAlertModal) {
+                currentAlertModal.remove();
+                currentAlertModal = null;
+            }
+            if (alertDismissHandler) {
+                document.removeEventListener('mousedown', alertDismissHandler);
+                alertDismissHandler = null;
+            }
+        },
         show() {
+            this.destroy(); // Ensure clean state before showing
+
             // Collect all active alerts from drawings
             const allAlerts = [];
             if (deps.state && deps.state.drawings) {
@@ -199,10 +214,6 @@ const AlertService = (() => {
                     });
                 });
             }
-
-            // Remove existing
-            const existing = document.getElementById('alerts-hub-modal');
-            if (existing) { existing.remove(); return; }
 
             const modal = document.createElement('div');
             modal.id = 'alerts-hub-modal';
@@ -233,7 +244,7 @@ const AlertService = (() => {
                     <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
                     Price Alerts (${allAlerts.length})
                 </span>
-                <button onclick="this.closest('#alerts-hub-modal').remove()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;line-height:1;padding:0">×</button>
+                <button onclick="AlertService.AlertHub.destroy()" style="background:none;border:none;color:var(--muted);cursor:pointer;font-size:18px;line-height:1;padding:0">×</button>
             `;
 
             const body = document.createElement('div');
@@ -272,16 +283,15 @@ const AlertService = (() => {
             modal.appendChild(header);
             modal.appendChild(body);
             document.body.appendChild(modal);
+            currentAlertModal = modal;
 
-            // Dismiss on click outside
             setTimeout(() => {
-                const dismiss = (e) => {
-                    if (!modal.contains(e.target)) {
-                        modal.remove();
-                        document.removeEventListener('mousedown', dismiss);
+                alertDismissHandler = (e) => {
+                    if (currentAlertModal && !currentAlertModal.contains(e.target)) {
+                        this.destroy();
                     }
                 };
-                document.addEventListener('mousedown', dismiss);
+                document.addEventListener('mousedown', alertDismissHandler);
             }, 10);
         }
     };

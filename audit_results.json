@@ -1,0 +1,1050 @@
+[
+  {
+    "file": "frontend/paper-trading.js",
+    "line": 368,
+    "category": "addEventListener",
+    "target": "toggleHistoryBtn",
+    "event": "click",
+    "code": "toggleHistoryBtn.addEventListener('click', (e) => {"
+  },
+  {
+    "file": "frontend/paper-trading.js",
+    "line": 413,
+    "category": "addEventListener",
+    "target": "exitReplayBtn",
+    "event": "click",
+    "code": "if (exitReplayBtn) exitReplayBtn.addEventListener('click', () => this.exitReplay());"
+  },
+  {
+    "file": "frontend/paper-trading.js",
+    "line": 921,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "if (this.currentReplayTrade === trade) setTimeout(attemptDraw, 200);"
+  },
+  {
+    "file": "frontend/paper-trading.js",
+    "line": 925,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(() => {"
+  },
+  {
+    "file": "frontend/paper-trading.js",
+    "line": 1176,
+    "category": "Observer",
+    "target": "global",
+    "event": "ResizeObserver",
+    "code": "const resizeObserver = new ResizeObserver(entries => {"
+  },
+  {
+    "file": "frontend/paper-trading.js",
+    "line": 1230,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(forceReset, 50);"
+  },
+  {
+    "file": "frontend/paper-trading.js",
+    "line": 1231,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(forceReset, 150);"
+  },
+  {
+    "file": "frontend/paper-trading.js",
+    "line": 1232,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(forceReset, 300); // Guarantee we outlast any ResizeObserver layout shifts"
+  },
+  {
+    "file": "frontend/paper-trading.js",
+    "line": 1322,
+    "category": "Chart_Subscribe",
+    "target": "chart",
+    "event": "VisibleTimeRangeChange",
+    "code": "cd.chart.timeScale().subscribeVisibleTimeRangeChange(syncFn);"
+  },
+  {
+    "file": "frontend/paper-trading.js",
+    "line": 1331,
+    "category": "AnimationFrame",
+    "target": "",
+    "event": "",
+    "code": "requestAnimationFrame(loop);"
+  },
+  {
+    "file": "frontend/paper-trading.js",
+    "line": 1333,
+    "category": "AnimationFrame",
+    "target": "",
+    "event": "",
+    "code": "requestAnimationFrame(loop);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 240,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "prim._unhoverTimeout = setTimeout(() => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 279,
+    "category": "removeEventListener",
+    "target": "window",
+    "event": "pointerup",
+    "code": "window.removeEventListener('pointerup', onUp);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 280,
+    "category": "removeEventListener",
+    "target": "window",
+    "event": "pointermove",
+    "code": "window.removeEventListener('pointermove', onGlobalMove);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 304,
+    "category": "addEventListener",
+    "target": "window",
+    "event": "pointerup",
+    "code": "window.addEventListener('pointerup', onUp);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 305,
+    "category": "addEventListener",
+    "target": "window",
+    "event": "pointermove",
+    "code": "window.addEventListener('pointermove', onGlobalMove);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 309,
+    "category": "addEventListener",
+    "target": "container",
+    "event": "pointermove",
+    "code": "container.addEventListener('pointermove', onMouseMove);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 310,
+    "category": "addEventListener",
+    "target": "container",
+    "event": "pointerdown",
+    "code": "container.addEventListener('pointerdown', onPointerDown, { capture: true });"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 381,
+    "category": "addEventListener",
+    "target": "document",
+    "event": "DOMContentLoaded",
+    "code": "document.addEventListener(\"DOMContentLoaded\", () => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 448,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(() => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 518,
+    "category": "Network",
+    "target": "global",
+    "event": "EventSource",
+    "code": "state.liveStream = new EventSource(`${CONFIG.API_BASE}/live`);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 525,
+    "category": "addEventListener",
+    "target": "state.liveStream",
+    "event": "status",
+    "code": "state.liveStream.addEventListener('status', () => updateConnectionStatus());"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 526,
+    "category": "addEventListener",
+    "target": "state.liveStream",
+    "event": "ping",
+    "code": "state.liveStream.addEventListener('ping', () => updateConnectionStatus());"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 531,
+    "category": "Network",
+    "target": "global",
+    "event": "WebSocket",
+    "code": "state.binanceWs = new WebSocket('wss://stream.binance.com:9443/ws');"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 545,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(connectLiveStream, 5000); // Reconnect loop"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 563,
+    "category": "Network",
+    "target": "global",
+    "event": "WebSocket",
+    "code": "state.hlWs = new WebSocket('wss://api.hyperliquid.xyz/ws');"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 569,
+    "category": "Interval",
+    "target": "",
+    "event": "",
+    "code": "state.hlPingInterval = setInterval(() => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 593,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(connectLiveStream, 5000); // Reconnect loop"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 760,
+    "category": "addEventListener",
+    "target": "pane",
+    "event": "click",
+    "code": "pane.addEventListener('click', () => setActiveChart(chartData.id));"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 883,
+    "category": "addEventListener",
+    "target": "input",
+    "event": "focus",
+    "code": "input.addEventListener(\"focus\", openDropdown);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 884,
+    "category": "addEventListener",
+    "target": "input",
+    "event": "click",
+    "code": "input.addEventListener(\"click\", () => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 893,
+    "category": "addEventListener",
+    "target": "chartTypeSelect",
+    "event": "change",
+    "code": "chartTypeSelect.addEventListener(\"change\", (e) => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 902,
+    "category": "addEventListener",
+    "target": "screenshotBtn",
+    "event": "click",
+    "code": "screenshotBtn.addEventListener(\"click\", () => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 922,
+    "category": "addEventListener",
+    "target": "paneWatchlistBtn",
+    "event": "click",
+    "code": "paneWatchlistBtn.addEventListener(\"click\", (e) => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 931,
+    "category": "addEventListener",
+    "target": "goLiveBtn",
+    "event": "click",
+    "code": "goLiveBtn.addEventListener(\"click\", () => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 942,
+    "category": "addEventListener",
+    "target": "replayToggleBtn",
+    "event": "click",
+    "code": "replayToggleBtn.addEventListener(\"click\", () => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 947,
+    "category": "addEventListener",
+    "target": "input",
+    "event": "input",
+    "code": "input.addEventListener(\"input\", (e) => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 954,
+    "category": "removeEventListener",
+    "target": "document",
+    "event": "mousedown",
+    "code": "document.removeEventListener(\"mousedown\", clickOutsideHandler);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 955,
+    "category": "removeEventListener",
+    "target": "document",
+    "event": "touchstart",
+    "code": "document.removeEventListener(\"touchstart\", clickOutsideHandler);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 962,
+    "category": "addEventListener",
+    "target": "document",
+    "event": "mousedown",
+    "code": "document.addEventListener(\"mousedown\", clickOutsideHandler);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 963,
+    "category": "addEventListener",
+    "target": "document",
+    "event": "touchstart",
+    "code": "document.addEventListener(\"touchstart\", clickOutsideHandler, { passive: true });"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 965,
+    "category": "addEventListener",
+    "target": "input",
+    "event": "keydown",
+    "code": "input.addEventListener(\"keydown\", (e) => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 1009,
+    "category": "addEventListener",
+    "target": "dropdown",
+    "event": "click",
+    "code": "dropdown.addEventListener(\"click\", (e) => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 1042,
+    "category": "addEventListener",
+    "target": "intervalSelect",
+    "event": "change",
+    "code": "intervalSelect.addEventListener(\"change\", async () => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 1064,
+    "category": "addEventListener",
+    "target": "indicatorSelect",
+    "event": "change",
+    "code": "indicatorSelect.addEventListener(\"change\", (e) => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 1195,
+    "category": "addEventListener",
+    "target": "container",
+    "event": "mousedown",
+    "code": "container.addEventListener('mousedown', (e) => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 1299,
+    "category": "addEventListener",
+    "target": "container",
+    "event": "mousemove",
+    "code": "container.addEventListener('mousemove', (e) => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 1607,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(() => chartData.justDragged = false, 50);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 1640,
+    "category": "addEventListener",
+    "target": "container",
+    "event": "mouseup",
+    "code": "container.addEventListener('mouseup', finishDrag);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 1641,
+    "category": "addEventListener",
+    "target": "container",
+    "event": "mouseleave",
+    "code": "container.addEventListener('mouseleave', () => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 1650,
+    "category": "addEventListener",
+    "target": "container",
+    "event": "click",
+    "code": "container.addEventListener('click', (e) => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 1712,
+    "category": "addEventListener",
+    "target": "container",
+    "event": "dblclick",
+    "code": "container.addEventListener('dblclick', (e) => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 1734,
+    "category": "Chart_Subscribe",
+    "target": "chart",
+    "event": "Click",
+    "code": "chartData.chart.subscribeClick((param) => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 1805,
+    "category": "Chart_Subscribe",
+    "target": "chart",
+    "event": "CrosshairMove",
+    "code": "if (typeof chartData.chart.subscribeCrosshairMove === \"function\") {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 1806,
+    "category": "Chart_Subscribe",
+    "target": "chart",
+    "event": "CrosshairMove",
+    "code": "chartData.chart.subscribeCrosshairMove((param) => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 1851,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(() => runWheelDiagnostics(chartData.id), 1000);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 2221,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(forceReset, 50);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 2306,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(() => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 2438,
+    "category": "AnimationFrame",
+    "target": "",
+    "event": "",
+    "code": "requestAnimationFrame(() => flushChartUpdate(chartData));"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 2805,
+    "category": "addEventListener",
+    "target": "legendEl",
+    "event": "click",
+    "code": "legendEl.addEventListener('click', (e) => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 3141,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(() => {"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 3780,
+    "category": "addEventListener",
+    "target": "window",
+    "event": "wheel",
+    "code": "window.addEventListener('wheel', tracker('Window'), { capture: true, passive: true });"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 3781,
+    "category": "addEventListener",
+    "target": "document",
+    "event": "wheel",
+    "code": "document.addEventListener('wheel', tracker('Document'), { capture: true, passive: true });"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 3782,
+    "category": "addEventListener",
+    "target": "container",
+    "event": "wheel",
+    "code": "container.addEventListener('wheel', tracker('Chart Container'), { capture: true, passive: true });"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 3783,
+    "category": "addEventListener",
+    "target": "canvas",
+    "event": "wheel",
+    "code": "if (canvas) canvas.addEventListener('wheel', tracker('Chart Canvas'), { capture: true, passive: true });"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 4025,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "wlRefreshTimer = setTimeout(WatchlistService.refreshWatchlistFromCharts, 1200);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 4036,
+    "category": "Interval",
+    "target": "",
+    "event": "",
+    "code": "setInterval(scheduleWLRefresh, 8000);"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 4041,
+    "category": "addEventListener",
+    "target": "document",
+    "event": "DOMContentLoaded",
+    "code": "document.addEventListener('DOMContentLoaded', () => setTimeout(initNewFeatures, 800));"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 4041,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "document.addEventListener('DOMContentLoaded', () => setTimeout(initNewFeatures, 800));"
+  },
+  {
+    "file": "frontend/script.js",
+    "line": 4043,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(initNewFeatures, 800);"
+  },
+  {
+    "file": "frontend/toolbar.js",
+    "line": 1,
+    "category": "addEventListener",
+    "target": "document",
+    "event": "DOMContentLoaded",
+    "code": "document.addEventListener('DOMContentLoaded', () => {"
+  },
+  {
+    "file": "frontend/toolbar.js",
+    "line": 41,
+    "category": "addEventListener",
+    "target": "btn",
+    "event": "click",
+    "code": "btn.addEventListener('click', (e) => {"
+  },
+  {
+    "file": "frontend/toolbar.js",
+    "line": 55,
+    "category": "addEventListener",
+    "target": "shapeGroupArrow",
+    "event": "click",
+    "code": "shapeGroupArrow.addEventListener('click', (e) => {"
+  },
+  {
+    "file": "frontend/toolbar.js",
+    "line": 61,
+    "category": "addEventListener",
+    "target": "document",
+    "event": "click",
+    "code": "document.addEventListener('click', (e) => {"
+  },
+  {
+    "file": "frontend/toolbar.js",
+    "line": 70,
+    "category": "addEventListener",
+    "target": "item",
+    "event": "click",
+    "code": "item.addEventListener('click', (e) => {"
+  },
+  {
+    "file": "frontend/toolbar.js",
+    "line": 95,
+    "category": "addEventListener",
+    "target": "clearDrawingsBtn",
+    "event": "click",
+    "code": "clearDrawingsBtn.addEventListener('click', () => {"
+  },
+  {
+    "file": "frontend/services/alert.js",
+    "line": 27,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(() => {"
+  },
+  {
+    "file": "frontend/services/alert.js",
+    "line": 29,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(() => popup.remove(), 300);"
+  },
+  {
+    "file": "frontend/services/alert.js",
+    "line": 277,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(() => {"
+  },
+  {
+    "file": "frontend/services/alert.js",
+    "line": 281,
+    "category": "removeEventListener",
+    "target": "document",
+    "event": "mousedown",
+    "code": "document.removeEventListener('mousedown', dismiss);"
+  },
+  {
+    "file": "frontend/services/alert.js",
+    "line": 284,
+    "category": "addEventListener",
+    "target": "document",
+    "event": "mousedown",
+    "code": "document.addEventListener('mousedown', dismiss);"
+  },
+  {
+    "file": "frontend/services/bootstrap.js",
+    "line": 81,
+    "category": "Interval",
+    "target": "",
+    "event": "",
+    "code": "setInterval(updateCountdowns, 1000);"
+  },
+  {
+    "file": "frontend/services/bootstrap.js",
+    "line": 82,
+    "category": "Interval",
+    "target": "",
+    "event": "",
+    "code": "setInterval(updateTimestamp, 1000);"
+  },
+  {
+    "file": "frontend/services/bootstrap.js",
+    "line": 83,
+    "category": "Interval",
+    "target": "",
+    "event": "",
+    "code": "setInterval(fetchMarketMovers, 5000);"
+  },
+  {
+    "file": "frontend/services/context-menu.js",
+    "line": 52,
+    "category": "addEventListener",
+    "target": "document",
+    "event": "mousedown",
+    "code": "document.addEventListener('mousedown', (e) => {"
+  },
+  {
+    "file": "frontend/services/context-menu.js",
+    "line": 59,
+    "category": "addEventListener",
+    "target": "document",
+    "event": "scroll",
+    "code": "document.addEventListener('scroll', hide, true);"
+  },
+  {
+    "file": "frontend/services/context-menu.js",
+    "line": 62,
+    "category": "addEventListener",
+    "target": "document",
+    "event": "keydown",
+    "code": "document.addEventListener('keydown', (e) => {"
+  },
+  {
+    "file": "frontend/services/context-menu.js",
+    "line": 98,
+    "category": "AnimationFrame",
+    "target": "",
+    "event": "",
+    "code": "requestAnimationFrame(() => {"
+  },
+  {
+    "file": "frontend/services/context-menu.js",
+    "line": 110,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(() => {"
+  },
+  {
+    "file": "frontend/services/context-menu.js",
+    "line": 165,
+    "category": "addEventListener",
+    "target": "container",
+    "event": "contextmenu",
+    "code": "container.addEventListener('contextmenu', (e) => {"
+  },
+  {
+    "file": "frontend/services/layout.js",
+    "line": 147,
+    "category": "addEventListener",
+    "target": "handle",
+    "event": "pointerdown",
+    "code": "handle.addEventListener('pointerdown', (e) => {"
+  },
+  {
+    "file": "frontend/services/layout.js",
+    "line": 172,
+    "category": "removeEventListener",
+    "target": "handle",
+    "event": "pointermove",
+    "code": "handle.removeEventListener('pointermove', onMove);"
+  },
+  {
+    "file": "frontend/services/layout.js",
+    "line": 173,
+    "category": "removeEventListener",
+    "target": "handle",
+    "event": "pointerup",
+    "code": "handle.removeEventListener('pointerup', onUp);"
+  },
+  {
+    "file": "frontend/services/layout.js",
+    "line": 180,
+    "category": "addEventListener",
+    "target": "handle",
+    "event": "pointermove",
+    "code": "handle.addEventListener('pointermove', onMove);"
+  },
+  {
+    "file": "frontend/services/layout.js",
+    "line": 181,
+    "category": "addEventListener",
+    "target": "handle",
+    "event": "pointerup",
+    "code": "handle.addEventListener('pointerup', onUp);"
+  },
+  {
+    "file": "frontend/services/layout.js",
+    "line": 193,
+    "category": "addEventListener",
+    "target": "handle",
+    "event": "pointerdown",
+    "code": "handle.addEventListener('pointerdown', (e) => {"
+  },
+  {
+    "file": "frontend/services/layout.js",
+    "line": 218,
+    "category": "removeEventListener",
+    "target": "handle",
+    "event": "pointermove",
+    "code": "handle.removeEventListener('pointermove', onMove);"
+  },
+  {
+    "file": "frontend/services/layout.js",
+    "line": 219,
+    "category": "removeEventListener",
+    "target": "handle",
+    "event": "pointerup",
+    "code": "handle.removeEventListener('pointerup', onUp);"
+  },
+  {
+    "file": "frontend/services/layout.js",
+    "line": 226,
+    "category": "addEventListener",
+    "target": "handle",
+    "event": "pointermove",
+    "code": "handle.addEventListener('pointermove', onMove);"
+  },
+  {
+    "file": "frontend/services/layout.js",
+    "line": 227,
+    "category": "addEventListener",
+    "target": "handle",
+    "event": "pointerup",
+    "code": "handle.addEventListener('pointerup', onUp);"
+  },
+  {
+    "file": "frontend/services/layout.js",
+    "line": 232,
+    "category": "AnimationFrame",
+    "target": "",
+    "event": "",
+    "code": "requestAnimationFrame(() => positionGridHandles(grid, numCols, numRows));"
+  },
+  {
+    "file": "frontend/services/layout.js",
+    "line": 235,
+    "category": "Observer",
+    "target": "global",
+    "event": "ResizeObserver",
+    "code": "grid._resizeObserver = new ResizeObserver(() => positionGridHandles(grid, numCols, numRows));"
+  },
+  {
+    "file": "frontend/services/overlay.js",
+    "line": 181,
+    "category": "Observer",
+    "target": "global",
+    "event": "ResizeObserver",
+    "code": "state.resizeObs = new ResizeObserver(() => {"
+  },
+  {
+    "file": "frontend/services/overlay.js",
+    "line": 389,
+    "category": "Observer",
+    "target": "global",
+    "event": "ResizeObserver",
+    "code": "state.resizeObs = new ResizeObserver(() => {"
+  },
+  {
+    "file": "frontend/services/replay.js",
+    "line": 59,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "chartData.replay.timer = setTimeout(() => this.runLoop(chartData, onFrameRendered, onEnd), interval);"
+  },
+  {
+    "file": "frontend/services/replay.js",
+    "line": 255,
+    "category": "addEventListener",
+    "target": "document",
+    "event": "keydown",
+    "code": "document.addEventListener('keydown', escapeHandler);"
+  },
+  {
+    "file": "frontend/services/replay.js",
+    "line": 272,
+    "category": "removeEventListener",
+    "target": "document",
+    "event": "keydown",
+    "code": "document.removeEventListener('keydown', chartData.replay._escapeHandler);"
+  },
+  {
+    "file": "frontend/services/replay.js",
+    "line": 304,
+    "category": "removeEventListener",
+    "target": "document",
+    "event": "keydown",
+    "code": "document.removeEventListener('keydown', chartData.replay._escapeHandler);"
+  },
+  {
+    "file": "frontend/services/ui-initializer.js",
+    "line": 9,
+    "category": "addEventListener",
+    "target": "chartCountEl",
+    "event": "change",
+    "code": "chartCountEl.addEventListener(\"change\", event => {"
+  },
+  {
+    "file": "frontend/services/ui-initializer.js",
+    "line": 45,
+    "category": "addEventListener",
+    "target": "tzSelect",
+    "event": "change",
+    "code": "tzSelect.addEventListener(\"change\", (e) => {"
+  },
+  {
+    "file": "frontend/services/ui-initializer.js",
+    "line": 99,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(() => {"
+  },
+  {
+    "file": "frontend/services/ui-initializer.js",
+    "line": 112,
+    "category": "addEventListener",
+    "target": "marketTicker",
+    "event": "click",
+    "code": "marketTicker.addEventListener('click', (e) => {"
+  },
+  {
+    "file": "frontend/services/ui-initializer.js",
+    "line": 134,
+    "category": "addEventListener",
+    "target": "document",
+    "event": "visibilitychange",
+    "code": "document.addEventListener(\"visibilitychange\", () => {"
+  },
+  {
+    "file": "frontend/services/ui-initializer.js",
+    "line": 165,
+    "category": "addEventListener",
+    "target": "sidebarToggleBtn",
+    "event": "click",
+    "code": "sidebarToggleBtn.addEventListener(\"click\", () => {"
+  },
+  {
+    "file": "frontend/services/ui-initializer.js",
+    "line": 184,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(() => {"
+  },
+  {
+    "file": "frontend/services/ui-initializer.js",
+    "line": 201,
+    "category": "addEventListener",
+    "target": "tab",
+    "event": "click",
+    "code": "tab.addEventListener('click', () => {"
+  },
+  {
+    "file": "frontend/services/ui-initializer.js",
+    "line": 223,
+    "category": "addEventListener",
+    "target": "syncChartsBtn",
+    "event": "click",
+    "code": "syncChartsBtn.addEventListener(\"click\", () => {"
+  },
+  {
+    "file": "frontend/services/watchlist.js",
+    "line": 10,
+    "category": "Interval",
+    "target": "",
+    "event": "",
+    "code": "setInterval(() => {"
+  },
+  {
+    "file": "frontend/services/watchlist.js",
+    "line": 86,
+    "category": "addEventListener",
+    "target": "toggleBtn",
+    "event": "click",
+    "code": "toggleBtn.addEventListener('click', () => {"
+  },
+  {
+    "file": "frontend/services/watchlist.js",
+    "line": 92,
+    "category": "addEventListener",
+    "target": "closeBtn",
+    "event": "click",
+    "code": "closeBtn.addEventListener('click', closeWatchlist);"
+  },
+  {
+    "file": "frontend/services/watchlist.js",
+    "line": 96,
+    "category": "addEventListener",
+    "target": "bellBtn",
+    "event": "click",
+    "code": "bellBtn.addEventListener('click', () => {"
+  },
+  {
+    "file": "frontend/services/watchlist.js",
+    "line": 143,
+    "category": "addEventListener",
+    "target": "opt",
+    "event": "mousedown",
+    "code": "opt.addEventListener('mousedown', (e) => {"
+  },
+  {
+    "file": "frontend/services/watchlist.js",
+    "line": 150,
+    "category": "addEventListener",
+    "target": "btn",
+    "event": "mousedown",
+    "code": "btn.addEventListener('mousedown', (e) => {"
+  },
+  {
+    "file": "frontend/services/watchlist.js",
+    "line": 160,
+    "category": "addEventListener",
+    "target": "addInput",
+    "event": "input",
+    "code": "addInput.addEventListener('input', () => {"
+  },
+  {
+    "file": "frontend/services/watchlist.js",
+    "line": 172,
+    "category": "addEventListener",
+    "target": "addInput",
+    "event": "focus",
+    "code": "addInput.addEventListener('focus', () => {"
+  },
+  {
+    "file": "frontend/services/watchlist.js",
+    "line": 178,
+    "category": "addEventListener",
+    "target": "addInput",
+    "event": "blur",
+    "code": "addInput.addEventListener('blur', () => {"
+  },
+  {
+    "file": "frontend/services/watchlist.js",
+    "line": 179,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(() => {"
+  },
+  {
+    "file": "frontend/services/watchlist.js",
+    "line": 184,
+    "category": "addEventListener",
+    "target": "addInput",
+    "event": "keydown",
+    "code": "addInput.addEventListener('keydown', (e) => {"
+  },
+  {
+    "file": "frontend/services/watchlist.js",
+    "line": 210,
+    "category": "Timeout",
+    "target": "",
+    "event": "",
+    "code": "setTimeout(refreshWatchlistFromCharts, 1500);"
+  },
+  {
+    "file": "frontend/services/watchlist.js",
+    "line": 360,
+    "category": "addEventListener",
+    "target": "row",
+    "event": "click",
+    "code": "row.addEventListener('click', () => {"
+  },
+  {
+    "file": "frontend/services/watchlist.js",
+    "line": 378,
+    "category": "addEventListener",
+    "target": "removeBtn",
+    "event": "click",
+    "code": "removeBtn.addEventListener('click', (e) => {"
+  }
+]

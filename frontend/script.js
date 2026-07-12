@@ -630,6 +630,7 @@ function renderGrid() {
 
     Object.values(state.charts).forEach(chartData => {
         unsubscribeChart(chartData);
+        if (window.ChartLifecycleService) ChartLifecycleService.detach(chartData);
         if (chartData.chart) chartData.chart.remove();
     });
     state.charts = {};
@@ -949,19 +950,6 @@ function populatePaneControls(chartData) {
         renderOptions(e.target.value);
     });
 
-    const clickOutsideHandler = (e) => {
-        if (!symbolContainer.isConnected) {
-            document.removeEventListener("mousedown", clickOutsideHandler);
-            document.removeEventListener("touchstart", clickOutsideHandler);
-            return;
-        }
-        if (dropdown.classList.contains("show") && !symbolContainer.contains(e.target)) {
-            closeDropdown();
-        }
-    };
-    document.addEventListener("mousedown", clickOutsideHandler);
-    document.addEventListener("touchstart", clickOutsideHandler, { passive: true });
-
     input.addEventListener("keydown", (e) => {
         const options = dropdown.querySelectorAll(".custom-select-option");
         if (e.key === "ArrowDown") {
@@ -1175,22 +1163,21 @@ function initializeChart(chartData) {
     let draggingLineInfo = null;
     
     // --- INFINITE SCROLL PAGINATION & SYNC ---
-    if (typeof chartData.chart.timeScale().subscribeVisibleLogicalRangeChange === "function") {
-        chartData.chart.timeScale().subscribeVisibleLogicalRangeChange((logicalRange) => {
-            if (!logicalRange) return;
-            
-            if (state.syncCharts) {
-                syncTimeScales(chartData.id, logicalRange);
-            }
-            
-            if (chartData.isFetchingHistory || chartData.hasReachedBeginning) return;
-            
-            // If user scrolls within 100 bars of the oldest loaded candle, fetch more
-            if (logicalRange.from < 100) {
-                loadOlderHistoricalData(chartData);
-            }
-        });
-    }
+    const logicalRangeChangeHandler = (logicalRange) => {
+        if (!logicalRange) return;
+        
+        if (state.syncCharts) {
+            syncTimeScales(chartData.id, logicalRange);
+        }
+        
+        if (chartData.isFetchingHistory || chartData.hasReachedBeginning) return;
+        
+        // If user scrolls within 100 bars of the oldest loaded candle, fetch more
+        if (logicalRange.from < 100) {
+            loadOlderHistoricalData(chartData);
+        }
+    };
+    ChartLifecycleService.attach(chartData, { visibleLogicalRangeChange: logicalRangeChangeHandler });
 
     container.addEventListener('mousedown', (e) => {
         if (chartData.drawingMode === 'hline' || chartData.drawingMode === 'vline') return;
@@ -1731,7 +1718,7 @@ function initializeChart(chartData) {
         }
     });
 
-    chartData.chart.subscribeClick((param) => {
+    const clickHandler = (param) => {
         if (chartData.justDragged) return; // Ignore native clicks resolving immediately after a drag
         
         if (chartData.replay && chartData.replay.status === 'selecting') {
@@ -1800,35 +1787,35 @@ function initializeChart(chartData) {
             clickedPrice = chartData.candleSeries.coordinateToPrice(param.point.y);
         }
         checkAndInteractWithLine(chartData, clickedPrice, param.time, param.point);
-    });
+    };
+    ChartLifecycleService.attach(chartData, { click: clickHandler });
 
-    if (typeof chartData.chart.subscribeCrosshairMove === "function") {
-        chartData.chart.subscribeCrosshairMove((param) => {
-            if (window.drawingManager && window.drawingManager.activeDrawing) {
-                window.drawingManager.handleCrosshairMove(chartData, param);
-            }
-            
-            // Track if crosshair is hovering inside chart
-            if (param && param.point) {
-                chartData.hoverParam = param;
-            } else {
-                chartData.hoverParam = null;
-            }
-            
-            updateChartLegend(chartData, param);
-            
-            if (state.isSyncingCrosshair) return;
-            
-            state.isSyncingCrosshair = true;
-            try {
-                handleCrosshairSync(chartData, param);
-            } catch (err) {
-                console.warn("Crosshair sync error:", err);
-            } finally {
-                state.isSyncingCrosshair = false;
-            }
-        });
-    }
+    const crosshairMoveHandler = (param) => {
+        if (window.drawingManager && window.drawingManager.activeDrawing) {
+            window.drawingManager.handleCrosshairMove(chartData, param);
+        }
+        
+        // Track if crosshair is hovering inside chart
+        if (param && param.point) {
+            chartData.hoverParam = param;
+        } else {
+            chartData.hoverParam = null;
+        }
+        
+        updateChartLegend(chartData, param);
+        
+        if (state.isSyncingCrosshair) return;
+        
+        state.isSyncingCrosshair = true;
+        try {
+            handleCrosshairSync(chartData, param);
+        } catch (err) {
+            console.warn("Crosshair sync error:", err);
+        } finally {
+            state.isSyncingCrosshair = false;
+        }
+    };
+    ChartLifecycleService.attach(chartData, { crosshairMove: crosshairMoveHandler });
 
 
 
@@ -1846,9 +1833,6 @@ function initializeChart(chartData) {
     if (window.drawingManager) {
         window.drawingManager.bindDragHandles(chartData);
     }
-
-    // Add diagnostics requested for wheel event investigation
-    setTimeout(() => runWheelDiagnostics(chartData.id), 1000);
 
     // Attach right-click context menu to this chart
     ContextMenuService.attach(chartData);
@@ -3737,52 +3721,6 @@ async function fetchAndRenderAssetInfo(symbol, forceRefresh = false) {
 
 
 
-
-// --- Diagnostics for Wheel Events ---
-function runWheelDiagnostics(chartId) {
-    const container = document.getElementById(`${chartId}-container`);
-    if (!container) return;
-    
-    console.group(`🔍 Wheel Event Investigation: ${chartId}`);
-    console.log("1. Exact DOM element acting as container:", container);
-    
-    const canvas = container.querySelector('canvas');
-    if (canvas) {
-        const containerRect = container.getBoundingClientRect();
-        const canvasRect = canvas.getBoundingClientRect();
-        console.log(`2. Canvas fills area? Container: ${containerRect.width}x${containerRect.height}, Canvas: ${canvasRect.width}x${canvasRect.height}`);
-        console.log("7. Canvas Z-Index:", window.getComputedStyle(canvas).zIndex || 'auto');
-        
-        const getPath = (el) => {
-            const path = [];
-            while (el && el !== document.body && el !== document.documentElement) {
-                let name = el.tagName.toLowerCase();
-                if (el.id) name += `#${el.id}`;
-                if (el.className && typeof el.className === 'string') name += `.${el.className.split(' ').join('.')}`;
-                path.unshift(name);
-                el = el.parentNode;
-            }
-            return path.join(' > ');
-        };
-        console.log("8. DOM Path to Canvas:", getPath(canvas));
-    }
-
-    let node = container;
-    while (node && node !== document) {
-        const style = window.getComputedStyle(node);
-        if (['auto', 'scroll'].includes(style.overflow) || ['auto', 'scroll'].includes(style.overflowY)) {
-            console.warn(`4. Scrollable parent found:`, node, `overflow: ${style.overflow}`);
-        }
-        node = node.parentNode;
-    }
-
-    const tracker = (source) => (e) => console.log(`[Wheel Event] Captured by ${source} | Target:`, e.target);
-    window.addEventListener('wheel', tracker('Window'), { capture: true, passive: true });
-    document.addEventListener('wheel', tracker('Document'), { capture: true, passive: true });
-    container.addEventListener('wheel', tracker('Chart Container'), { capture: true, passive: true });
-    if (canvas) canvas.addEventListener('wheel', tracker('Chart Canvas'), { capture: true, passive: true });
-    console.groupEnd();
-}
 
 // --- Order Book Functions ---
 

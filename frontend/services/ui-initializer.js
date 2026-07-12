@@ -245,6 +245,38 @@ const UIInitializer = (() => {
         updateSyncBtnVisibility();
         window._updateSyncBtnVisibility = updateSyncBtnVisibility;
     }
+    function bindGlobalDocumentEvents(deps) {
+        const { state } = deps;
+        
+        const closeSymbolSearchDropdowns = (e) => {
+            const openDropdowns = document.querySelectorAll('.custom-select-dropdown.show');
+            openDropdowns.forEach(dropdown => {
+                const container = dropdown.closest('.symbol-select-container');
+                if (container && !container.contains(e.target)) {
+                    dropdown.classList.remove('show');
+                    
+                    const pane = dropdown.closest('.chart-pane');
+                    if (pane && pane.id) {
+                        const chartData = state.charts[pane.id];
+                        if (chartData) {
+                            const input = pane.querySelector('.symbol-select-input');
+                            if (input) {
+                                input.value = chartData.symbol;
+                                input.blur();
+                            }
+                        }
+                    }
+                }
+            });
+        };
+
+        const globalClickOutsideHandler = (e) => {
+            closeSymbolSearchDropdowns(e);
+        };
+
+        document.addEventListener("mousedown", globalClickOutsideHandler);
+        document.addEventListener("touchstart", globalClickOutsideHandler, { passive: true });
+    }
 
     function initialize(deps) {
         bindChartCount(deps);
@@ -256,6 +288,7 @@ const UIInitializer = (() => {
         bindVisibilityChange(deps);
         bindSidebar(deps);
         bindChartSync(deps);
+        bindGlobalDocumentEvents(deps);
     }
 
     return { initialize };

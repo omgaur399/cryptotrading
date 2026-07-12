@@ -173,16 +173,22 @@ const OverlayService = (() => {
     // Re-subscribe to time/price scale changes to keep VP in sync with panning/zooming
     if (!state.subscribed) {
         state.subscribed = true;
-        chartData.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+        const vpvrRangeHandler = () => {
+            if (chartData.indicators.vpvr) OverlayService.VolumeProfile.draw(chartData);
+        };
+        if (window.ChartLifecycleService) {
+            window.ChartLifecycleService.attach(chartData, { visibleLogicalRangeChange: vpvrRangeHandler });
+        } else {
+            chartData.chart.timeScale().subscribeVisibleLogicalRangeChange(vpvrRangeHandler);
+        }
+        // Watch container resize
+        if (state.resizeObs) {
+            state.resizeObs.disconnect();
+        }
+        state.resizeObs = new ResizeObserver(() => {
             if (chartData.indicators.vpvr) OverlayService.VolumeProfile.draw(chartData);
         });
-        // Watch container resize
-        if (!state.resizeObs) {
-            state.resizeObs = new ResizeObserver(() => {
-                if (chartData.indicators.vpvr) OverlayService.VolumeProfile.draw(chartData);
-            });
-            state.resizeObs.observe(container);
-        }
+        state.resizeObs.observe(container);
     }
 
         }
@@ -382,15 +388,21 @@ const OverlayService = (() => {
     // Subscribe to time scale changes once
     if (!state.subscribed) {
         state.subscribed = true;
-        chartData.chart.timeScale().subscribeVisibleLogicalRangeChange(() => {
+        const sessionRangeHandler = () => {
+            if (chartData.indicators.sessions) OverlayService.SessionBands.draw(chartData);
+        };
+        if (window.ChartLifecycleService) {
+            window.ChartLifecycleService.attach(chartData, { visibleLogicalRangeChange: sessionRangeHandler });
+        } else {
+            chartData.chart.timeScale().subscribeVisibleLogicalRangeChange(sessionRangeHandler);
+        }
+        if (state.resizeObs) {
+            state.resizeObs.disconnect();
+        }
+        state.resizeObs = new ResizeObserver(() => {
             if (chartData.indicators.sessions) OverlayService.SessionBands.draw(chartData);
         });
-        if (!state.resizeObs) {
-            state.resizeObs = new ResizeObserver(() => {
-                if (chartData.indicators.sessions) OverlayService.SessionBands.draw(chartData);
-            });
-            state.resizeObs.observe(container);
-        }
+        state.resizeObs.observe(container);
     }
 
         }

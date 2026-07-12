@@ -69,6 +69,7 @@ const AppBootstrap = (() => {
         }
         
         UIInitializer.initialize(deps);
+        if (window.ChartLifecycleService) ChartLifecycleService.initialize(deps);
 
         connectLiveStream();
         await loadInstruments();
