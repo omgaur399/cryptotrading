@@ -378,7 +378,35 @@ const TimeUtils = {
 
 const state = StateManager.createInitialState();
 
-document.addEventListener("DOMContentLoaded", initializeApp);
+document.addEventListener("DOMContentLoaded", () => {
+    AppBootstrap.initialize({
+        state,
+        StorageService,
+        ThemeService,
+        readSavedChartCount,
+        loadDependencies,
+        setChartCount,
+        openBacktestModal,
+        TimeUtils,
+        toggleTheme,
+        connectLiveStream,
+        loadInstruments,
+        renderGrid,
+        updateTimestamp,
+        MarketWidgetService,
+        fetchMarketMovers,
+        WatchlistService,
+        switchChartSymbol,
+        updateCountdowns,
+        updateTicker,
+        syncChartWithCache,
+        fetchAndRenderAssetInfo,
+        ChartService,
+        syncTimeScales
+    });
+    
+    AppBootstrap.start();
+});
 
 async function loadDependencies() {
     const scripts = ['indicators.js', 'paper-account.js', 'paper-positions.js', 'paper-history.js', 'paper-trading.js'];
@@ -393,284 +421,6 @@ async function loadDependencies() {
     }
 }
 
-async function initializeApp() {
-    // Inject a blank favicon to prevent 404 errors
-    const favicon = document.createElement('link');
-    favicon.rel = 'icon';
-    favicon.href = 'data:,';
-    document.head.appendChild(favicon);
-
-    state.theme = StorageService.getTheme() || "dark";
-    if (state.theme === "light") document.body.classList.add("light-theme");
-    ThemeService.injectThemeStyles();
-
-    const savedDrawings = StorageService.getDrawings();
-    if (savedDrawings) {
-        try {
-            state.drawings = JSON.parse(savedDrawings);
-        } catch (e) {
-            state.drawings = {};
-        }
-    }
-
-    const savedBacktest = StorageService.getBacktest();
-    if (savedBacktest) {
-        try {
-            state.backtest = JSON.parse(savedBacktest);
-        } catch (e) {
-            state.backtest = null;
-        }
-    }
-
-    state.chartCount = readSavedChartCount();
-    
-    await loadDependencies();
-    if (window.PaperTrading) {
-        window.paperTrading = new window.PaperTrading();
-    }
-    
-    document.getElementById("chart-count").value = String(state.chartCount);
-    document.getElementById("chart-count").addEventListener("change", event => {
-        setChartCount(Number(event.target.value));
-    });
-
-    const chartCountEl = document.getElementById("chart-count");
-    if (chartCountEl && chartCountEl.parentNode) {
-        const backtestBtn = document.createElement("button");
-        backtestBtn.id = "global-backtest-btn";
-        backtestBtn.className = "theme-btn";
-        backtestBtn.textContent = "📊 Backtest";
-        backtestBtn.style.marginLeft = "12px";
-        backtestBtn.onclick = openBacktestModal;
-        chartCountEl.parentNode.appendChild(backtestBtn);
-
-        const tzSelect = document.getElementById("global-tz-select");
-        if (tzSelect) {
-            const localTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-            tzSelect.innerHTML = `
-                <option value="${localTz}">LCL</option>
-                <option value="UTC">UTC</option>
-                <option value="America/New_York">EST</option>
-                <option value="Asia/Kolkata">IST</option>
-            `;
-            tzSelect.value = TimeUtils.timeZone;
-            if (!tzSelect.value) tzSelect.value = localTz;
-            
-            const tzDisplay = document.getElementById("global-tz-display");
-            if (tzDisplay) tzDisplay.textContent = tzSelect.options[tzSelect.selectedIndex].text;
-            
-            tzSelect.addEventListener("change", (e) => {
-                TimeUtils.timeZone = e.target.value;
-                if (tzDisplay) tzDisplay.textContent = tzSelect.options[tzSelect.selectedIndex].text;
-                StorageService.saveTimeZone(e.target.value);
-                Object.values(state.charts).forEach(chartData => {
-                    if (chartData.chart) chartData.chart.applyOptions({ localization: { timeFormatter: TimeUtils.formatTooltip } });
-                });
-                updateTimestamp();
-            });
-        }
-
-        const themeBtn = document.createElement("button");
-        themeBtn.id = "theme-toggle";
-        themeBtn.className = "toolbar-btn";
-        themeBtn.title = "Toggle Light/Dark Mode";
-        themeBtn.textContent = state.theme === "dark" ? "☀️" : "🌙";
-        themeBtn.style.marginTop = "auto";
-        themeBtn.style.marginBottom = "4px";
-        themeBtn.onclick = toggleTheme;
-        const drawingToolbar = document.getElementById("drawing-toolbar");
-        if (drawingToolbar) {
-            drawingToolbar.appendChild(themeBtn);
-        } else {
-            chartCountEl.parentNode.appendChild(themeBtn);
-        }
-
-        const resetGridBtn = document.createElement("button");
-        resetGridBtn.id = "reset-grid-btn";
-        resetGridBtn.className = "theme-btn";
-        resetGridBtn.title = "Reset chart grid to default equal sizes";
-        resetGridBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Reset Grid`;
-        resetGridBtn.style.marginLeft = "8px";
-        resetGridBtn.onclick = () => {
-            // Clear saved sizes for the current chart count
-            try {
-                const raw = StorageService.getGridSizes();
-                if (raw) {
-                    const all = JSON.parse(raw);
-                    delete all[state.chartCount];
-                    StorageService.saveGridSizes(all);
-                }
-            } catch(e) {}
-            // Re-render grid without saved sizes (CSS defaults kick in)
-            renderGrid();
-            // Brief visual feedback
-            resetGridBtn.textContent = '✓ Reset';
-            resetGridBtn.style.color = 'var(--green)';
-            setTimeout(() => {
-                resetGridBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:4px"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>Reset Grid`;
-                resetGridBtn.style.color = '';
-            }, 1200);
-        };
-        chartCountEl.parentNode.appendChild(resetGridBtn);
-
-    }
-
-    connectLiveStream();
-    await loadInstruments();
-    renderGrid();
-    updateTimestamp();
-    
-    MarketWidgetService.MarketTicker.create();
-    fetchMarketMovers();
-    
-    const marketTicker = document.getElementById('market-ticker-container');
-    if (marketTicker) {
-        marketTicker.addEventListener('click', (e) => {
-            const wlBtn = e.target.closest('.ticker-watchlist-btn');
-            if (wlBtn) {
-                e.preventDefault();
-                e.stopPropagation();
-                const symbol = wlBtn.getAttribute('data-symbol');
-                if (symbol) WatchlistService.toggleWatchlistSymbol(symbol);
-                return;
-            }
-
-            const moverItem = e.target.closest('.market-ticker-item');
-            if (moverItem && moverItem.dataset.symbol) {
-                const symbol = moverItem.dataset.symbol;
-                const activeChartId = state.activeChartId || 'chart-1';
-                switchChartSymbol(activeChartId, symbol);
-            }
-        });
-    }
-
-    setInterval(updateCountdowns, 1000);
-    setInterval(updateTimestamp, 1000);
-    setInterval(fetchMarketMovers, 5000);
-
-    document.addEventListener("visibilitychange", () => {
-        if (!document.hidden) {
-            Object.values(state.charts).forEach(chartData => {
-                if (chartData.lastPrice !== null) {
-                    updateTicker(chartData, chartData.lastPrice, chartData.referencePrice);
-                }
-                syncChartWithCache(chartData);
-            });
-            updateCountdowns();
-            fetchMarketMovers();
-        }
-    });
-
-    // --- GLOBAL COLLAPSIBLE RIGHT SIDEBAR INIT & TOGGLE ---
-    const sidebarToggleBtn = document.getElementById("sidebar-toggle-divider");
-    const globalSidebar = document.getElementById("global-right-sidebar");
-    
-    if (sidebarToggleBtn && globalSidebar) {
-        // Load persistent collapse state (default to active/not collapsed)
-        const isCollapsed = StorageService.getSidebarCollapsed();
-        const arrowEl = sidebarToggleBtn.querySelector(".sidebar-toggle-arrow");
-        if (isCollapsed) {
-            globalSidebar.classList.add("collapsed");
-            if (arrowEl) arrowEl.textContent = "◀";
-        } else {
-            globalSidebar.classList.remove("collapsed");
-            if (arrowEl) arrowEl.textContent = "▶";
-        }
-        
-        sidebarToggleBtn.addEventListener("click", () => {
-            const willCollapse = !globalSidebar.classList.contains("collapsed");
-            if (willCollapse) {
-                globalSidebar.classList.add("collapsed");
-                if (arrowEl) arrowEl.textContent = "◀";
-            } else {
-                globalSidebar.classList.remove("collapsed");
-                if (arrowEl) arrowEl.textContent = "▶";
-                // Refresh active chart data in sidebar on open
-                const activeChart = state.charts[state.activeChartId] || state.charts['chart-1'];
-                if (activeChart && activeChart.symbol !== 'none' && activeChart.symbol !== 'No Chart') {
-                    fetchAndRenderAssetInfo(activeChart.symbol);
-                    MarketWidgetService.OrderBook.updateHeader(activeChart.symbol);
-                    if (window.paperTrading) {
-                        window.paperTrading.setActiveSymbol(activeChart.symbol);
-                    }
-                }
-            }
-            StorageService.saveSidebarCollapsed(willCollapse);
-            
-            // Trigger resize on all charts to adapt to new width
-            setTimeout(() => {
-                Object.values(state.charts).forEach(cd => {
-                    if (cd.chart) {
-                        const el = document.getElementById(`${cd.id}-container`);
-                        if (el) {
-                            ChartService.resize(cd);
-                        }
-                    }
-                });
-            }, 250);
-        });
-    }
-
-    // Persistent sidebar tabs switcher
-    const sidebarTabs = document.querySelectorAll(".global-right-sidebar .sidebar-tab");
-    const sidebarSlider = document.getElementById("sidebar-slider");
-    if (sidebarTabs && sidebarSlider) {
-        sidebarTabs.forEach(tab => {
-            tab.addEventListener('click', () => {
-                sidebarTabs.forEach(t => t.classList.remove('active'));
-                tab.classList.add('active');
-                const idx = tab.dataset.index;
-                sidebarSlider.style.transform = `translateX(-${(idx * 100) / 3}%)`;
-            });
-        });
-    }
-
-    // Build the Paper Trading UI inside the static panel on start
-    if (window.paperTrading) {
-        const tradePanel = document.getElementById('paper-trade-panel');
-        if (tradePanel) {
-            window.paperTrading.buildUI(tradePanel);
-        }
-    }
-
-    // Chart Sync Toggle Setup
-    const syncChartsBtn = document.getElementById("sync-charts-btn");
-    state.syncCharts = StorageService.getSyncCharts();
-    if (syncChartsBtn) {
-        if (state.syncCharts) {
-            syncChartsBtn.classList.add("active");
-        } else {
-            syncChartsBtn.classList.remove("active");
-        }
-        
-        syncChartsBtn.addEventListener("click", () => {
-            state.syncCharts = !state.syncCharts;
-            if (state.syncCharts) {
-                syncChartsBtn.classList.add("active");
-                // Sync all charts immediately to the active one
-                const activeChart = state.charts[state.activeChartId] || state.charts['chart-1'];
-                if (activeChart && activeChart.chart) {
-                    const range = activeChart.chart.timeScale().getVisibleLogicalRange();
-                    if (range) {
-                        syncTimeScales(activeChart.id, range);
-                    }
-                }
-            } else {
-                syncChartsBtn.classList.remove("active");
-            }
-            StorageService.saveSyncCharts(state.syncCharts);
-        });
-    }
-
-    // Show sync btn only when >1 chart is active
-    const updateSyncBtnVisibility = () => {
-        const btn = document.getElementById("sync-charts-btn");
-        if (btn) btn.style.display = state.chartCount === 1 ? "none" : "";
-    };
-    updateSyncBtnVisibility();
-    // Expose so setChartCount can call it
-    window._updateSyncBtnVisibility = updateSyncBtnVisibility;
-}
 
 function syncTimeScales(sourceChartId, logicalRange) {
     if (state.isSyncingScales || !state.syncCharts) return;

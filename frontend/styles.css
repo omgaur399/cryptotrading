@@ -618,7 +618,7 @@ select:focus  {
 }
 
 /* Force charting elements to strictly respect container bounds */
-.chart-container > div:not(.chart-message):not(.countdown-timer),
+.chart-container > div:not(.chart-message):not(.countdown-timer):not(.custom-vertical-line),
 .chart-container > svg {
     position: absolute !important;
     top: 0; left: 0; right: 0; bottom: 0;
