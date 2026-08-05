@@ -931,8 +931,44 @@ function getChartThemeOptions(isLight) {
     };
 }
 
+function toggleTheme(state, StorageService, DrawingManagerService) {
+    const st = state || window.state;
+    const storageSvc = StorageService || window.StorageService;
+    const drawingMgr = DrawingManagerService || window.DrawingManagerService;
+
+    if (!st) return;
+
+    st.theme = st.theme === "dark" ? "light" : "dark";
+    if (storageSvc) storageSvc.saveTheme(st.theme);
+    
+    const isLight = st.theme === "light";
+    document.body.classList.toggle("light-theme", isLight);
+    
+    const btn = document.getElementById("theme-toggle");
+    if (btn) btn.textContent = isLight ? "🌙" : "☀️";
+    
+    const themeOptions = getChartThemeOptions(isLight);
+    Object.values(st.charts || {}).forEach(chartData => {
+        if (chartData.chart) chartData.chart.applyOptions(themeOptions);
+        if (chartData.renderedDrawings) {
+            const lineColor = isLight ? '#3b82f6' : '#60a5fa';
+            Object.values(chartData.renderedDrawings).forEach(pl => {
+                if (pl && !(pl instanceof HTMLElement) && pl.applyOptions) {
+                    pl.applyOptions({ color: lineColor });
+                }
+            });
+        }
+        if (drawingMgr) {
+            drawingMgr.restoreDrawings(chartData);
+            drawingMgr.restorePrimitiveDrawings(chartData);
+        }
+        chartData.isSyncedCrosshairActive = false;
+    });
+}
+
     return {
         injectThemeStyles,
-        getChartThemeOptions
+        getChartThemeOptions,
+        toggleTheme
     };
 })();

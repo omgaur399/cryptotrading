@@ -3,41 +3,46 @@
 echo "Starting Trading Dashboard..."
 echo ""
 
-# Check if Python is installed
+cd "$(dirname "$0")" || exit 1
+
 if ! command -v python3 &> /dev/null; then
     echo "ERROR: Python 3 is not installed"
-    echo "Please install Python 3.8+ from https://www.python.org/"
     exit 1
 fi
 
-# Install dependencies
+if [ ! -d ".venv" ]; then
+    echo "[0/3] Creating Python virtual environment..."
+    python3 -m venv .venv
+
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Failed to create virtual environment"
+        echo "Run: sudo apt install python3-venv"
+        exit 1
+    fi
+fi
+
 echo "[1/3] Installing Python dependencies..."
-cd backend
-pip install -r requirements.txt
+.venv/bin/python -m pip install -r backend/requirements.txt
+
 if [ $? -ne 0 ]; then
     echo "ERROR: Failed to install dependencies"
     exit 1
 fi
 
-# Start Flask backend in background
 echo "[2/3] Starting Flask backend on http://localhost:5000..."
 echo ""
-python app.py &
+
+.venv/bin/python backend/app.py &
 BACKEND_PID=$!
 
-# Wait for server to start
 sleep 3
 
-# Open frontend in browser
 echo "[3/3] Opening dashboard in browser..."
-if command -v open &> /dev/null; then
-    # macOS
-    open "http://localhost:5000/frontend/index.html"
-elif command -v xdg-open &> /dev/null; then
-    # Linux
+
+if command -v xdg-open &> /dev/null; then
     xdg-open "http://localhost:5000/frontend/index.html"
 else
-    echo "Please open http://localhost:5000/frontend/index.html in your browser"
+    echo "Please open http://localhost:5000/frontend/index.html"
 fi
 
 echo ""
@@ -52,5 +57,4 @@ echo ""
 echo "Press Ctrl+C to shut down the server"
 echo ""
 
-# Wait for interrupt
 wait $BACKEND_PID

@@ -491,22 +491,24 @@ window.ModalService = {
         };
 
         const symbolSelect = document.getElementById('backtest-symbol');
-        config.symbols.forEach(s => {
+        const symbolsList = config.symbols || (config.instruments ? config.instruments.map(i => i.symbol) : ["BTC"]);
+        symbolsList.forEach(s => {
             const option = document.createElement('option');
             option.value = s;
             option.textContent = s;
             symbolSelect.appendChild(option);
         });
-        symbolSelect.value = config.defaultSymbol;
+        if (config.defaultSymbol) symbolSelect.value = config.defaultSymbol;
 
         const intervalSelect = document.getElementById('backtest-interval');
-        config.timeframes.forEach(tf => {
+        const timeframesList = config.timeframes || (config.instruments && config.instruments[0] ? config.instruments[0].timeframes : ["1m", "5m", "15m", "1h", "4h", "1d"]);
+        timeframesList.forEach(tf => {
             const option = document.createElement('option');
             option.value = tf;
             option.textContent = tf;
             intervalSelect.appendChild(option);
         });
-        intervalSelect.value = config.defaultInterval;
+        if (config.defaultInterval) intervalSelect.value = config.defaultInterval;
 
         const endDate = new Date();
         const startDate = new Date();
