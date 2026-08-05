@@ -7,3 +7,11 @@ env/
 
 # OS
 .DS_Store
+
+# SQLite runtime lock & log files
+backend/*.db-wal
+backend/*.db-shm
+
+# Local Python virtual environment & backups
+.venv/
+*.backup
